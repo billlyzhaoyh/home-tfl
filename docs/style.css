@@ -111,7 +111,7 @@ a { color: inherit; }
 .strip.mini { margin: 0; flex: 1; min-width: 0; }
 .strip.mini .seg-leg { min-width: 4px; }
 .strip.mini .bar { height: 8px; }
-.strip.mini .walk .bar { margin: 3px 0; border-top-width: 2px; }
+.strip.mini .walk .bar { height: 0; margin: 3px 0; border-top-width: 2px; }
 
 .facts { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 6px; }
 .fact { font-size: 14px; display: flex; gap: 8px; align-items: baseline; }
