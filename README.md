@@ -8,7 +8,8 @@ A small commute board for two people in London: **when to leave, which line, and
 - The journey is the headline, **HOME → OFFICE**, with a swap button. It defaults to the office before 1pm and home after. Tap the start point to plan from your current location instead. A **Billy | Erica** switch picks whose commute.
 - **Usual busyness** for every station where you'd board or change, at the time you'd be there: a small chart of the hour either side and *quiet / busy / peak*, compared with that station's own busiest time of the week (TfL's typical-week profiles). Each option row names its busiest stop, so similar-speed routes can be compared, with a hint when leaving 15–30 min earlier is usually calmer.
 - **Time this trip → Arrived** logs how long the trip really took (on that phone only). **Trips** shows averages vs plan and a chart of recent trips per person and direction.
-- **Setup** holds names, home and offices, transport modes, and a share link to copy everything to your partner's phone.
+- **Routes to compare** (Setup): TfL only suggests a few near-identical routes, so you can save your own, e.g. *change at Paddington, then Elizabeth line* or *via Baker Street*. Every Check plans them too and ranks them with TfL's suggestions, so you can ride and time them.
+- **Setup** holds names, home and offices, transport modes, routes to compare, and a share link to copy everything to your partner's phone.
 
 ## When it talks to TfL
 
@@ -20,6 +21,10 @@ Only when you tap a button. There's no polling and nothing fetches on open:
 Switching person, direction or start point just shows that combination's last result until you tap Check.
 
 **Next step:** commute times (e.g. "arrive by 09:00"), so the app can plan for when you need to be at work and check once when opened around then.
+
+## Where trips are stored
+
+There is no database. Trips, settings and cached results live in each phone's browser storage (`localStorage`), separately on each phone. They survive app updates, but clearing Safari's website data deletes them, and Safari can clear storage for sites not opened for 7 days. Home Screen web apps are exempt from that. So: add the app to your Home Screen, and use **Trips → Back up** now and then (a JSON file you can **Restore** from; it merges without duplicates). The app also asks the browser for persistent storage the first time you time a trip.
 
 ## Privacy
 

@@ -68,9 +68,14 @@
       <div id="tiles"></div>
       <h2 class="h2">Recent</h2>
       <ul class="trip-list" id="tripList"></ul>
+      <h2 class="h2">Keep your trips safe</h2>
+      <p class="muted small" id="backupNote"></p>
       <div class="row">
+        <button class="btn btn-small" id="backupBtn" type="button">Back up</button>
+        <button class="btn btn-small" id="restoreBtn" type="button">Restore</button>
         <button class="btn btn-small" id="exportCsv" type="button">Export CSV</button>
         <button class="btn btn-small btn-ghost" id="clearLog" type="button">Clear log</button>
+        <input type="file" id="restoreFile" accept="application/json,.json" hidden>
       </div>
     </section>
 
@@ -113,6 +118,12 @@
           <span>Prefer</span>
           <div class="seg" id="s-pref"></div>
         </div>
+      </div>
+
+      <div class="group" data-step="extra">
+        <h2 class="h2">Routes to compare</h2>
+        <p class="muted small">TfL only suggests a few similar routes. Add ones you want to try, like changing at Paddington onto the Elizabeth line, and Check plans them too (1–2 extra requests each). They work in both directions.</p>
+        <div id="s-routes"></div>
       </div>
 
       <div class="group" data-step="extra">

@@ -29,6 +29,8 @@ function normaliseSettings(s = {}) {
     office: { a: "", b: "", ...s.office },
     modes: Array.isArray(s.modes) && s.modes.length ? s.modes : ["tube", "elizabeth-line", "dlr", "overground"],
     pref: s.pref || "leasttime",
+    // Extra routes to plan on every Check: change at a station, optionally onto one mode.
+    routes: { a: [], b: [], ...s.routes },
     key: s.key || ""
   };
 }
@@ -206,9 +208,9 @@ function slim(j) {
     })
   };
 }
-function rank(journeys) {
+function rank(journeys, limit = 4) {
   // Earliest arrival first.
-  return journeys.slice().sort((a, b) => a.end.localeCompare(b.end) || a.duration - b.duration).slice(0, 4);
+  return journeys.slice().sort((a, b) => a.end.localeCompare(b.end) || a.duration - b.duration).slice(0, limit);
 }
 const firstRail = (j) => j.legs.find((l) => RAIL.has(l.mode) && l.naptan);
 // Boarding and interchange points: where you wait on a platform.
@@ -226,11 +228,26 @@ const PROFILE_TTL = 30 * 24 * 60 * MIN;
 let profiles = store.get("profiles", {});
 
 async function loadProfiles(naptans) {
-  const need = [...new Set(naptans)].filter((n) => !profiles[n] || !("peak" in profiles[n]) || Date.now() - profiles[n].at > PROFILE_TTL);
+  // Stations without data are retried after a week rather than a month.
+  const fresh = (p) => p && "peak" in p && Date.now() - p.at < (p.days ? PROFILE_TTL : PROFILE_TTL / 4);
+  const need = [...new Set(naptans)].filter((n) => !fresh(profiles[n]));
   if (!need.length) return;
   await Promise.all(need.map(async (n) => {
     try {
-      const d = await tfl(`/crowding/${n}`);
+      let d = await tfl(`/crowding/${n}`);
+      // Big rail stations have several IDs (Paddington: 910GPADTON for planning, 910GPADTLL
+      // for crowding). If one has no profile, try its siblings in the same hub. Tube stations
+      // in a hub can be separate buildings (Hammersmith), so they're left alone.
+      if (!d.isFound && n.startsWith("910G")) {
+        const stop = await tfl(`/StopPoint/${n}`);
+        const hub = stop.hubNaptanCode && await tfl(`/StopPoint/${stop.hubNaptanCode}`);
+        const siblings = (hub?.children || []).filter((c) => c.id !== n && /Naptan(Metro|Rail)Station/.test(c.stopType) &&
+          (c.modes || []).some((m) => (stop.modes || []).includes(m)));
+        for (const c of siblings) {
+          const alt = await tfl(`/crowding/${c.id}`).catch(() => null);
+          if (alt?.isFound) { d = alt; break; }
+        }
+      }
       const days = {};
       (d.daysOfWeek || []).forEach((day) => {
         const bands = new Array(96).fill(null);
@@ -312,6 +329,50 @@ async function planJourney(from, to, params) {
   }
 }
 
+// ---------- routes to compare ----------
+// TfL only suggests a few near-identical options, so people can save routes to try.
+// "Via X" is one request with TfL's `via`. "Via X, then <mode>" is planned in two halves
+// (to X, then X onward on that mode only), because TfL happily passes through X on the
+// same line otherwise. Towards home the halves swap: <mode> to X, then anything home.
+const RAIL_MODES = MODES.filter((m) => m.id !== "bus");
+const viaLabel = (r) => `via ${r.via.name}${r.then ? " · " + MODES.find((m) => m.id === r.then).label : ""}`;
+const tflDate = (iso) => ({ date: iso.slice(0, 10).replace(/-/g, ""), time: iso.slice(11, 13) + iso.slice(14, 16) });
+
+async function planVia(r, from, to, d, params) {
+  const path = (a, b) => `/Journey/JourneyResults/${encodeURIComponent(a)}/to/${encodeURIComponent(b)}`;
+  const best = (jr) => rank((jr.journeys || []).map(slim))[0];
+  if (!r.then) {
+    const j = best(await tfl(path(from, to), { ...params, via: r.via.id }));
+    return j && { ...j, via: viaLabel(r) };
+  }
+  const only = { ...params, mode: r.then + ",walking" };
+  const [firstParams, secondParams] = d === "work" ? [params, only] : [only, params];
+  const j1 = best(await tfl(path(from, r.via.id), firstParams));
+  if (!j1) return null;
+  const j2 = best(await tfl(path(r.via.id, to), { ...secondParams, ...tflDate(j1.end) }));
+  if (!j2) return null;
+  return {
+    start: j1.start, end: j2.end, duration: Math.round((new Date(j2.end) - new Date(j1.start)) / MIN),
+    legs: [...j1.legs, ...j2.legs], via: viaLabel(r)
+  };
+}
+
+async function searchStations(q) {
+  const d = await tfl(`/StopPoint/Search/${encodeURIComponent(q)}`, { modes: RAIL_MODES.map((m) => m.id).join(","), maxResults: 6 });
+  return (d.matches || []).map((m) => ({
+    id: m.id, name: stationName(m.name), modes: (m.modes || []).filter((x) => RAIL_MODES.some((r) => r.id === x))
+  }));
+}
+// Search returns hubs (e.g. HUBPAD) that group several stations; the journey planner needs
+// the station itself, so pick the one serving the chosen mode (the most specific one).
+async function resolveStation(match, mode) {
+  if (!match.id.startsWith("HUB")) return match.id;
+  const hub = await tfl(`/StopPoint/${match.id}`);
+  const kids = (hub.children || []).filter((c) => /Naptan(Metro|Rail)Station/.test(c.stopType));
+  const serving = kids.filter((c) => (c.modes || []).includes(mode)).sort((a, b) => a.modes.length - b.modes.length);
+  return (serving[0] || kids[0] || match).id;
+}
+
 // ---------- checking TfL (the only places that fetch) ----------
 async function check() {
   if (state.busy) return;
@@ -326,8 +387,14 @@ async function check() {
       catch (e) { toast(`Location unavailable — using ${ends.fromName}`); }
     }
     const params = journeyParams();
-    const jr = await planJourney(from, ends.to, params);
-    const journeys = rank((jr.journeys || []).map(slim));
+    const [jr, ...extra] = await Promise.all([
+      planJourney(from, ends.to, params),
+      ...(settings.routes[who] || []).map((r) => planVia(r, from, ends.to, d, params).catch(() => null))
+    ]);
+    // TfL's best few, then one per saved route (skipping any TfL already suggested).
+    const suggested = rank((jr.journeys || []).map(slim)).slice(0, 3);
+    const same = (x, y) => routeSummary(x) === routeSummary(y) && x.start === y.start;
+    const journeys = rank(suggested.concat(extra.filter((x) => x && !suggested.some((y) => same(x, y)))), Infinity);
     const liveLegs = {};
     journeys.forEach((j) => { const l = firstRail(j); if (l && dueSoon(l)) liveLegs[liveKey(l)] = l; });
     const [lines, live] = await Promise.all([
@@ -526,7 +593,7 @@ function renderToday() {
   const othersBad = c.status.filter((s) => s.sev !== 10 && !routeLines.has(s.id));
 
   const hero = `<article class="hero${past ? " past" : ""}">
-    <p class="label">${label} · from ${esc(c.fromName)}</p>
+    <p class="label">${label} · from ${esc(c.fromName)}${j.via ? " · " + esc(j.via) : ""}</p>
     <div class="hero-top">
       <div><div class="bigtime">${hhmm(j.start)}</div><div class="sub countdown">${past ? "This time has passed — check again" : relMins(leaveIn)}</div></div>
       <div class="hero-side"><p class="label">Arrive</p><div class="midtime">${hhmm(j.end)}</div><div class="sub">${j.duration} min</div></div>
@@ -542,6 +609,7 @@ function renderToday() {
     // Second line: any disruption on this route's lines, then its busiest stop.
     const lines = [...new Set(railLegs(x).map((l) => l.line))].map((id) => statusById[id]).filter((st) => st && st.sev !== 10);
     const meta = lines.map((st) => `<span><span class="dot ${sevClass(st.sev)}"></span>${esc(st.name)}: ${esc(st.desc)}</span>`);
+    if (x.via) meta.unshift(`<span class="alt-via">${esc(x.via)}</span>`);
     const peak = peakBusyness(x);
     if (peak) meta.push(`<span><span class="dot ${typicalLabel(peak.v).level}"></span>${esc(stationName(peak.leg.from))} ${busyPhrase(peak.v)}</span>`);
     return `<button class="alt" type="button" data-sel="${i}"><span class="t">${hhmm(x.start)}</span>${strip(x, true)}<span class="d">${x.duration}m</span>${meta.length ? `<span class="alt-meta">${meta.join("")}</span>` : ""}</button>`;
@@ -560,6 +628,8 @@ let tripTimer = null;
 const activeTrip = () => store.get("active", null);
 
 function startTrip() {
+  // Ask the browser not to evict our storage (trips live only on this phone).
+  navigator.storage?.persist?.().catch(() => {});
   const c = store.get(cacheKey(state.who, dir()), null);
   const j = c?.journeys?.[Math.min(state.sel, (c?.journeys?.length || 1) - 1)];
   store.set("active", { who: state.who, dir: dir(), start: Date.now(), route: j ? routeSummary(j) : "", planned: j?.duration || null, journey: j || null });
@@ -593,7 +663,7 @@ function endTrip(save) {
     const { journey, ...rest } = a;
     const log = store.get("log", []);
     log.unshift({ ...rest, end, mins: Math.max(1, Math.round((end - a.start) / MIN)) });
-    store.set("log", log.slice(0, 500));
+    store.set("log", log.slice(0, 2000));
     toast(`Logged ${Math.round((end - a.start) / MIN)} min`);
   }
   store.del("active"); clearInterval(tripTimer);
@@ -623,6 +693,10 @@ function sparkline(trips) {
 
 function renderTrips() {
   const log = store.get("log", []);
+  const last = device.backedUp ? new Date(device.backedUp) : null;
+  const stale = log.length && (!last || Date.now() - last > 7 * 24 * 60 * MIN);
+  $("backupNote").innerHTML = `Trips are saved only in this browser on this phone — clearing Safari's website data deletes them. Add the app to your Home Screen and back up now and then. ` +
+    `<span class="${stale ? "stale-note" : ""}">${last ? `Last backup ${last.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}.` : log.length ? "Not backed up yet." : ""}</span>`;
   if (!log.length) {
     $("tiles").innerHTML = `<div class="empty"><h2>No trips yet</h2><p>Tap <b>Time this trip</b> when you head out and <b>Arrived</b> when you get there. Averages and a chart build up here, on this phone only.</p></div>`;
     $("tripList").innerHTML = ""; return;
@@ -654,15 +728,39 @@ $("tripList").onclick = (e) => {
   const b = e.target.closest("[data-del]"); if (!b) return;
   const log = store.get("log", []); log.splice(+b.dataset.del, 1); store.set("log", log); renderTrips();
 };
+const download = (blob, filename) => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+$("backupBtn").onclick = () => {
+  const log = store.get("log", []);
+  if (!log.length) { toast("No trips to back up yet"); return; }
+  const body = JSON.stringify({ app: "home-tfl", v: 1, at: new Date().toISOString(), names: settings.names, log });
+  download(new Blob([body], { type: "application/json" }), `commute-trips-${new Date().toISOString().slice(0, 10)}.json`);
+  device.backedUp = Date.now(); saveDevice(); renderTrips();
+};
+$("restoreBtn").onclick = () => $("restoreFile").click();
+$("restoreFile").onchange = async (e) => {
+  const file = e.target.files[0]; e.target.value = "";
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (data.app !== "home-tfl" || !Array.isArray(data.log)) throw new Error("not a backup");
+    // Merge: keep every trip once, newest first.
+    const log = store.get("log", []), seen = new Set(log.map((t) => t.who + "|" + t.start));
+    const added = data.log.filter((t) => t && t.start && !seen.has(t.who + "|" + t.start));
+    store.set("log", log.concat(added).sort((a, b) => b.start - a.start).slice(0, 2000));
+    toast(`Restored ${added.length} trip${added.length === 1 ? "" : "s"}`); renderTrips();
+  } catch (err) { toast("That file isn't a trips backup"); }
+};
 $("exportCsv").onclick = () => {
   const log = store.get("log", []);
   if (!log.length) { toast("Nothing to export yet"); return; }
   const rows = [["who", "direction", "start", "end", "minutes", "planned_minutes", "route"]]
     .concat(log.map((t) => [name(t.who), t.dir, new Date(t.start).toISOString(), new Date(t.end).toISOString(), t.mins, t.planned ?? "", t.route]));
   const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-  a.download = "commute-log.csv"; a.click();
+  download(new Blob([csv], { type: "text/csv" }), "commute-log.csv");
 };
 $("clearLog").onclick = () => { if (confirm("Delete all logged trips on this phone?")) { store.set("log", []); renderTrips(); } };
 
@@ -682,7 +780,41 @@ function renderSetup() {
   segButtons($("s-pref"), PREFS, settings.pref, "pref");
   segButtons($("s-theme"), [["system", "System"], ["dark", "Dark"], ["light", "Light"]], device.theme, "theme");
   $("s-modes").innerHTML = MODES.map((m) => `<button type="button" class="chip${settings.modes.includes(m.id) ? " on" : ""}" data-mode="${m.id}" aria-pressed="${settings.modes.includes(m.id)}" style="--c:${m.c}"><i></i>${m.label}</button>`).join("");
+  renderRoutes();
   renderStep();
+}
+
+// Saved routes per person, plus a small find-a-station flow for adding one.
+let routeDraft = null; // { p, q, busy, results, pick }
+function renderRoutes() {
+  $("s-routes").innerHTML = PEOPLE.map((p) => {
+    const draft = routeDraft?.p === p ? routeDraft : null;
+    const rows = (settings.routes[p] || []).map((r, i) =>
+      `<li><span>${esc(viaLabel(r))}</span><button type="button" class="x" data-route-del="${p}|${i}" aria-label="Remove route">×</button></li>`).join("");
+    let add;
+    if (draft?.pick) {
+      const opts = [["", "any line"], ...RAIL_MODES.filter((m) => draft.pick.modes.includes(m.id)).map((m) => [m.id, m.label])];
+      add = `<div class="route-pick"><span>Change at <b>${esc(draft.pick.name)}</b>, then take</span>
+        <select data-route-then aria-label="Then take">${opts.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select>
+        <div class="row"><button class="btn btn-small btn-primary" type="button" data-route-add>Add route</button><button class="btn btn-small btn-ghost" type="button" data-route-cancel>Cancel</button></div></div>`;
+    } else {
+      const results = !draft?.results ? "" : draft.results.length
+        ? draft.results.map((m, i) => `<button type="button" class="chip" data-route-pick="${i}">${esc(m.name)}</button>`).join("")
+        : `<span class="muted small">No stations found</span>`;
+      add = `<div class="inline"><input type="text" data-route-q placeholder="Change at… e.g. Paddington" value="${esc(draft?.q || "")}" autocomplete="off" aria-label="Station to change at">` +
+        `<button class="btn btn-small" type="button" data-route-search ${draft?.busy ? "disabled" : ""}>${draft?.busy ? "…" : "Find"}</button></div>` +
+        (results ? `<div class="chips route-results">${results}</div>` : "");
+    }
+    return `<div class="routes-person" data-p="${p}"><h3>${esc(name(p))}</h3>${rows ? `<ul class="saved-routes">${rows}</ul>` : ""}${add}</div>`;
+  }).join("");
+}
+async function routeSearch(p) {
+  const q = document.querySelector(`.routes-person[data-p="${p}"] [data-route-q]`).value.trim();
+  if (!q) return;
+  routeDraft = { p, q, busy: true }; renderRoutes();
+  try { routeDraft = { p, q, results: await searchStations(q) }; }
+  catch (e) { routeDraft = { p, q, results: [] }; toast("Couldn't reach TfL"); }
+  renderRoutes();
 }
 
 function readTextFields() {
@@ -697,11 +829,26 @@ let savedFlash;
 function saved() { clearTimeout(savedFlash); savedFlash = setTimeout(() => toast("Saved"), 400); }
 
 $("view-setup").addEventListener("change", (e) => {
-  if (e.target.matches("input[type=text], input[type=password]")) { readTextFields(); renderSetup(); saved(); }
+  if (e.target.matches("input[type=text]:not([data-route-q]), input[type=password]")) { readTextFields(); renderSetup(); saved(); }
 });
 $("view-setup").addEventListener("click", async (e) => {
   const t = e.target.closest("button"); if (!t) return;
-  if (t.dataset.self) { device.self = t.dataset.self; state.who = device.self; saveDevice(); renderSetup(); }
+  const person = t.closest(".routes-person")?.dataset.p;
+  if ("routeSearch" in t.dataset) routeSearch(person);
+  else if (t.dataset.routePick) { routeDraft = { ...routeDraft, pick: routeDraft.results[+t.dataset.routePick] }; renderRoutes(); }
+  else if ("routeCancel" in t.dataset) { routeDraft = null; renderRoutes(); }
+  else if ("routeAdd" in t.dataset) {
+    const pick = routeDraft.pick, then = document.querySelector("[data-route-then]").value;
+    t.disabled = true;
+    try {
+      const id = await resolveStation(pick, then || pick.modes[0]);
+      settings.routes[person] = [...(settings.routes[person] || []), { via: { id, name: pick.name }, then }];
+      saveSettings(); routeDraft = null; renderRoutes(); toast("Route added — it's planned on every Check");
+    } catch (err) { toast("Couldn't reach TfL"); t.disabled = false; }
+  } else if (t.dataset.routeDel) {
+    const [p, i] = t.dataset.routeDel.split("|");
+    settings.routes[p].splice(+i, 1); saveSettings(); renderRoutes();
+  } else if (t.dataset.self) { device.self = t.dataset.self; state.who = device.self; saveDevice(); renderSetup(); }
   else if (t.dataset.pref) { settings.pref = t.dataset.pref; saveSettings(); renderSetup(); saved(); }
   else if (t.dataset.theme) { device.theme = t.dataset.theme; saveDevice(); applyTheme(); renderSetup(); }
   else if (t.dataset.mode) {
@@ -731,6 +878,9 @@ function renderStep() {
   $("stepBack").disabled = step === 1;
   $("stepNext").textContent = step === STEPS ? "Done" : "Next";
 }
+$("view-setup").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.matches("[data-route-q]")) { e.preventDefault(); routeSearch(e.target.closest(".routes-person").dataset.p); }
+});
 $("stepBack").onclick = () => { step = Math.max(1, step - 1); renderStep(); };
 $("stepNext").onclick = () => {
   readTextFields();

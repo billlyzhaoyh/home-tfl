@@ -259,6 +259,16 @@ input:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visibl
 .chip i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); display: inline-block; opacity: .45; }
 .chip.on { color: var(--fg); border-color: var(--fg); }
 .chip.on i { opacity: 1; }
+.routes-person { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 14px 14px; margin: 10px 0; }
+.routes-person h3 { font-size: 15px; margin: 12px 0 8px; }
+.saved-routes { list-style: none; margin: 0 0 10px; padding: 0; }
+.saved-routes li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; font-weight: 600; }
+.route-results { margin-top: 10px; }
+.route-pick { display: grid; gap: 10px; font-size: 14px; }
+.route-pick select { height: 42px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); color: var(--fg); font: inherit; font-size: 16px; padding: 0 10px; }
+.route-pick .row { margin: 0; }
+.alt-via { color: var(--fg); font-weight: 600; }
+.stale-note { color: var(--warn); font-weight: 600; }
 .advanced summary { cursor: pointer; list-style: none; }
 .advanced summary::-webkit-details-marker { display: none; }
 .advanced summary::after { content: " +"; }
