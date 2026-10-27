@@ -211,10 +211,66 @@ function rank(journeys) {
   return journeys.slice().sort((a, b) => a.end.localeCompare(b.end) || a.duration - b.duration).slice(0, 4);
 }
 const firstRail = (j) => j.legs.find((l) => RAIL.has(l.mode) && l.naptan);
+// Boarding and interchange points: where you wait on a platform.
+const railLegs = (j) => j.legs.filter((l) => RAIL.has(l.mode) && l.naptan);
+
+// ---------- typical busyness ----------
+// TfL publishes an average week per station in 15-minute bands. It barely changes, so each
+// station is fetched once on a Check and cached for 30 days. Tube and Elizabeth line only;
+// some stations have no data.
+// TfL's values are fractions of the station's all-time busiest moment, so an average week
+// rarely tops 0.4 and TfL's live bands would call nearly everything quiet. Instead each band
+// is compared with that station's own busiest band of the week: how close to its rush hour.
+const DAY_KEYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+const PROFILE_TTL = 30 * 24 * 60 * MIN;
+let profiles = store.get("profiles", {});
+
+async function loadProfiles(naptans) {
+  const need = [...new Set(naptans)].filter((n) => !profiles[n] || !("peak" in profiles[n]) || Date.now() - profiles[n].at > PROFILE_TTL);
+  if (!need.length) return;
+  await Promise.all(need.map(async (n) => {
+    try {
+      const d = await tfl(`/crowding/${n}`);
+      const days = {};
+      (d.daysOfWeek || []).forEach((day) => {
+        const bands = new Array(96).fill(null);
+        (day.timeBands || []).forEach((t) => {
+          const [h, m] = t.timeBand.slice(0, 5).split(":").map(Number);
+          bands[(h * 60 + m) / 15] = Math.round(t.percentageOfBaseLine * 100) / 100;
+        });
+        days[day.dayOfWeek] = bands;
+      });
+      const peak = Math.max(0, ...Object.values(days).flat().filter((v) => v != null));
+      profiles[n] = { at: Date.now(), peak, days: d.isFound && peak > 0 ? days : null };
+    } catch (e) { /* try again on the next Check */ }
+  }));
+  store.set("profiles", profiles);
+}
+
+// How busy a station typically is (0–1 of its weekly peak) in the 15-minute band
+// containing `iso`, shifted by `offset` bands.
+function typicalAt(naptan, iso, offset = 0) {
+  const p = profiles[naptan];
+  if (!p?.days || !p.peak) return null;
+  const d = new Date(new Date(iso).getTime() + offset * 15 * MIN);
+  const v = p.days[DAY_KEYS[d.getDay()]]?.[Math.floor((d.getHours() * 60 + d.getMinutes()) / 15)];
+  return v == null ? null : v / p.peak;
+}
+function typicalLabel(r) {
+  const lvl = r < 0.5 ? ["ok", "quiet"] : r < 0.8 ? ["warn", "busy"] : ["bad", "peak"];
+  return { level: lvl[0], text: lvl[1] };
+}
+// The busiest platform you'll wait on for this journey: { v, leg }, or null without data.
+function peakBusyness(j) {
+  return railLegs(j).map((leg) => ({ v: typicalAt(leg.naptan, leg.dep), leg }))
+    .filter((x) => x.v != null).sort((a, b) => b.v - a.v)[0] || null;
+}
+const busyPhrase = (r) => (typicalLabel(r).text === "peak" ? "at its peak" : "usually " + typicalLabel(r).text);
 const liveKey = (leg) => leg.naptan + "|" + leg.line;
 // Live trains only matter close to departure; skip them for a plan an hour out.
 const dueSoon = (leg) => { const m = minsUntil(leg.dep); return m >= -2 && m <= 30; };
-const stationName = (s) => String(s || "").replace(/ (Underground|Rail|DLR|Overground) Station$/, "").replace(/ Station$/, "");
+// "Hammersmith (Dist&Picc Line) Underground Station" -> "Hammersmith"; the line is named separately.
+const stationName = (s) => String(s || "").replace(/ (Underground|Rail|DLR|Overground) Station$/, "").replace(/ Station$/, "").replace(/\s*\([^)]*\)$/, "");
 
 // Arrivals + crowding once per station, then split per leg (several routes often share a first station).
 async function loadLiveFor(legs) {
@@ -276,7 +332,8 @@ async function check() {
     journeys.forEach((j) => { const l = firstRail(j); if (l && dueSoon(l)) liveLegs[liveKey(l)] = l; });
     const [lines, live] = await Promise.all([
       tfl(`/Line/Mode/${STATUS_MODES}/Status`).catch(() => []),
-      loadLiveFor(Object.values(liveLegs))
+      loadLiveFor(Object.values(liveLegs)),
+      loadProfiles(journeys.flatMap(railLegs).map((l) => l.naptan))
     ]);
     const status = lines.map((l) => {
       const s = l.lineStatuses?.[0] || {};
@@ -341,7 +398,7 @@ function renderLive(leg, live) {
   const fresh = live && Date.now() - live.at < 15 * MIN;
   const m = minsUntil(leg.dep);
   const btn = m > 30 ? "" : `<button class="linkbtn" type="button" data-refresh-trains ${state.liveBusy ? "disabled" : ""}>${state.liveBusy ? "Refreshing…" : "Refresh trains"}</button>`;
-  const head = `<div class="live-head"><p class="label">Next trains · ${station}</p>${btn}</div>`;
+  const head = `<div class="live-head"><p class="label">Next ${esc(leg.name || legName(leg))} trains · ${station}</p>${btn}</div>`;
   if (!live || !fresh) {
     const msg = m > 30 ? `Live trains appear 30 min before you leave (${relMins(m)}).` : live ? "Live trains are out of date." : "No live trains loaded.";
     return `<div class="live">${head}<p class="hint">${msg}</p></div>`;
@@ -360,6 +417,41 @@ function renderLive(leg, live) {
 }
 
 // ---------- rendering: Today ----------
+function renderBusyness(j) {
+  const legs = railLegs(j);
+  if (!legs.length) return "";
+  const rows = legs.map((l) => {
+    const v = typicalAt(l.naptan, l.dep);
+    const name = `<span class="busy-name">${esc(stationName(l.from))}</span><span class="busy-time mono">${hhmm(l.dep)}</span>`;
+    if (v == null) return `<li class="busy-row">${name}<span class="busy-none">no data</span></li>`;
+    const lvl = typicalLabel(v);
+    // An hour either side, one bar per 15 minutes, the band you're there in highlighted.
+    const bars = [-4, -3, -2, -1, 0, 1, 2, 3, 4].map((o) => {
+      const b = typicalAt(l.naptan, l.dep, o);
+      const h = b == null ? 0 : Math.max(2, Math.round(b * 22));
+      const t = new Date(new Date(l.dep).getTime() + o * 15 * MIN);
+      const tip = b == null ? "" : `<title>${hm(t)}: ${typicalLabel(b).text} (${Math.round(b * 100)}% of its usual peak)</title>`;
+      return `<rect x="${(o + 4) * 7}" y="${22 - h}" width="5" height="${h}" rx="1.5" class="${o === 0 ? "now " + lvl.level : ""}">${tip}</rect>`;
+    }).join("");
+    return `<li class="busy-row">${name}<svg class="busy-spark" viewBox="0 0 61 22" role="img" aria-label="Typical busyness an hour either side">${bars}</svg><span class="busy-lvl"><span class="dot ${lvl.level}"></span>${lvl.text}</span></li>`;
+  }).join("");
+  // If the busiest stop is usually calmer 15 or 30 min earlier, say so.
+  let hint = "";
+  const scored = legs.map((l) => ({ l, v: typicalAt(l.naptan, l.dep) })).filter((x) => x.v != null).sort((a, b) => b.v - a.v);
+  if (scored.length) {
+    const { l, v } = scored[0];
+    for (const o of [-1, -2]) {
+      const e = typicalAt(l.naptan, l.dep, o);
+      if (e != null && typicalLabel(e).text !== typicalLabel(v).text && e < v) {
+        hint = `<p class="hint">About ${-o * 15} min earlier, ${esc(stationName(l.from))} is usually ${typicalLabel(e).text}.</p>`;
+        break;
+      }
+    }
+  }
+  const day = new Date(j.start).toLocaleDateString("en-GB", { weekday: "long" });
+  return `<div class="busy"><p class="label" title="Compared with each station's own busiest time of the week">Usual busyness · ${day}s</p><ul class="busy-list">${rows}</ul>${hint}</div>`;
+}
+
 function renderHeader() {
   const t = now();
   $("date").textContent = t.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }).toUpperCase();
@@ -441,14 +533,18 @@ function renderToday() {
     </div>
     ${strip(j)}
     <ul class="facts">${routeStatus(j, statusById)}</ul>
+    ${renderBusyness(j)}
     ${rail ? renderLive(rail, c.live[liveKey(rail)]) : ""}
   </article>`;
 
   const alts = c.journeys.length > 1 ? `<div class="alts"><p class="label">Other options</p>` + c.journeys.map((x, i) => {
     if (i === sel) return "";
-    const worst = Math.min(...x.legs.map((l) => statusById[l.line]?.sev ?? 10));
-    const flag = worst !== 10 ? `<span class="dot flag ${sevClass(worst)}" title="Disruption on this route"></span>` : "";
-    return `<button class="alt" type="button" data-sel="${i}"><span class="t">${hhmm(x.start)}</span>${strip(x, true)}${flag}<span class="d">${x.duration}m</span></button>`;
+    // Second line: any disruption on this route's lines, then its busiest stop.
+    const lines = [...new Set(railLegs(x).map((l) => l.line))].map((id) => statusById[id]).filter((st) => st && st.sev !== 10);
+    const meta = lines.map((st) => `<span><span class="dot ${sevClass(st.sev)}"></span>${esc(st.name)}: ${esc(st.desc)}</span>`);
+    const peak = peakBusyness(x);
+    if (peak) meta.push(`<span><span class="dot ${typicalLabel(peak.v).level}"></span>${esc(stationName(peak.leg.from))} ${busyPhrase(peak.v)}</span>`);
+    return `<button class="alt" type="button" data-sel="${i}"><span class="t">${hhmm(x.start)}</span>${strip(x, true)}<span class="d">${x.duration}m</span>${meta.length ? `<span class="alt-meta">${meta.join("")}</span>` : ""}</button>`;
   }).join("") + `</div>` : "";
 
   const others = othersBad.length

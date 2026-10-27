@@ -6,6 +6,7 @@ A small commute board for two people in London: **when to leave, which line, and
 
 - **Today** shows a big *Leave 08:17 · arrive 08:52* for the best route, a strip of the route coloured by line (segment width = time on that leg), the status of the lines you'll use, and the next trains at your first station with a plain-English note ("Big gap after the next train — catch this one"). Other options sit below it; tap one to swap it in.
 - The journey is the headline, **HOME → OFFICE**, with a swap button. It defaults to the office before 1pm and home after. Tap the start point to plan from your current location instead. A **Billy | Erica** switch picks whose commute.
+- **Usual busyness** for every station where you'd board or change, at the time you'd be there: a small chart of the hour either side and *quiet / busy / peak*, compared with that station's own busiest time of the week (TfL's typical-week profiles). Each option row names its busiest stop, so similar-speed routes can be compared, with a hint when leaving 15–30 min earlier is usually calmer.
 - **Time this trip → Arrived** logs how long the trip really took (on that phone only). **Trips** shows averages vs plan and a chart of recent trips per person and direction.
 - **Setup** holds names, home and offices, transport modes, and a share link to copy everything to your partner's phone.
 
@@ -13,7 +14,7 @@ A small commute board for two people in London: **when to leave, which line, and
 
 Only when you tap a button. There's no polling and nothing fetches on open:
 
-- **Check now** makes about 2–4 requests: journey plan, line status, and arrivals plus crowding for the first station. Live trains are skipped when departure is more than 30 min away.
+- **Check now** makes about 2–4 requests: journey plan, line status, and arrivals plus crowding for the first station. Live trains are skipped when departure is more than 30 min away. The first time a station appears it also fetches its typical-week profile, which is then cached for 30 days.
 - **Refresh trains** reloads only the next trains for the selected route (2 requests).
 
 Switching person, direction or start point just shows that combination's last result until you tap Check.
