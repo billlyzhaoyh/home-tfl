@@ -157,11 +157,12 @@ function analyseGaps(seconds) {
   return { level: "ok", note: "Trains running normally." };
 }
 
+// TfL's value is a fraction of the busiest the station has been since July 2019 (not of a
+// normal day). TfL's own bands: quiet below 0.4, busy to 0.7, very busy above.
 function crowdLabel(v) {
   if (v == null) return null;
-  const pct = v <= 3 ? v * 100 : v; // API value may be a fraction of baseline
-  const lvl = pct < 60 ? ["ok", "quiet"] : pct < 100 ? ["ok", "normal"] : pct < 130 ? ["warn", "busy"] : ["bad", "very busy"];
-  return { pct: Math.round(pct), level: lvl[0], text: lvl[1] };
+  const lvl = v < 0.4 ? ["ok", "quiet"] : v < 0.7 ? ["warn", "busy"] : ["bad", "very busy"];
+  return { pct: Math.round(v * 100), level: lvl[0], text: lvl[1] };
 }
 
 // ---------- direction ----------
@@ -345,7 +346,7 @@ function renderLive(leg, live) {
     const msg = m > 30 ? `Live trains appear 30 min before you leave (${relMins(m)}).` : live ? "Live trains are out of date." : "No live trains loaded.";
     return `<div class="live">${head}<p class="hint">${msg}</p></div>`;
   }
-  const crowd = live.crowd ? `<p class="fact ${live.crowd.level} note"><span class="dot"></span><span>${station} is ${live.crowd.text} right now (${live.crowd.pct}% of usual)</span></p>` : "";
+  const crowd = live.crowd ? `<p class="fact ${live.crowd.level} note"><span class="dot"></span><span>${station} is ${live.crowd.text} right now (${live.crowd.pct}% of its busiest)</span></p>` : "";
   if (live.error) return `<div class="live">${head}<p class="hint">Live trains unavailable.</p>${crowd}</div>`;
   const plats = (live.platforms || []).map((p) => {
     const secs = p.times.map((t) => (new Date(t) - Date.now()) / 1000).filter((s) => s > -30);
