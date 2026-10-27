@@ -563,7 +563,7 @@ function renderSetup() {
   $("s-home").value = settings.home; $("s-office-a").value = settings.office.a; $("s-office-b").value = settings.office.b;
   $("s-key").value = settings.key;
   $("l-office-a").textContent = (settings.names.a || "Your") + (settings.names.a ? "'s office" : " office");
-  $("l-office-b").textContent = (settings.names.b ? settings.names.b + "'s" : "Partner's") + " office (optional)";
+  $("l-office-b").textContent = (settings.names.b ? settings.names.b + "'s" : "Partner's") + " office";
   segButtons($("s-self"), PEOPLE.map((p) => [p, settings.names[p] || (p === "a" ? "First name" : "Partner")]), device.self, "self");
   segButtons($("s-pref"), PREFS, settings.pref, "pref");
   segButtons($("s-theme"), [["system", "System"], ["dark", "Dark"], ["light", "Light"]], device.theme, "theme");
@@ -620,8 +620,9 @@ function renderStep() {
 $("stepBack").onclick = () => { step = Math.max(1, step - 1); renderStep(); };
 $("stepNext").onclick = () => {
   readTextFields();
-  if (step === 1 && !settings.names[device.self]) { toast("Add your name"); $("s-name-" + device.self).focus(); return; }
-  if (step === 2 && (!settings.home || !settings.office[device.self])) { toast("Add home and your office"); return; }
+  const missing = (ids) => ids.find((id) => !$(id).value.trim());
+  const gap = step === 1 ? missing(["s-name-a", "s-name-b"]) : missing(["s-home", "s-office-a", "s-office-b"]);
+  if (gap) { toast(step === 1 ? "Add both names" : "Add home and both offices"); $(gap).focus(); return; }
   if (step < STEPS) { step++; renderSetup(); window.scrollTo(0, 0); return; }
   device.onboarded = true; saveDevice(); renderStep();
   location.hash = "#today";
