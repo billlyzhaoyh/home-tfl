@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A two-person London commute board: leave-by times, line status and live trains, fetched only when you need them.">
+<meta name="theme-color" content="#0c0d0f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Commute">
+<title>Commute</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="date mono" id="date"></div>
+    <div class="pills">
+      <button class="pill" id="whoPill" type="button" aria-label="Whose commute"></button>
+      <button class="pill pill-dir" id="dirPill" type="button" aria-label="Direction"></button>
+    </div>
+  </header>
+
+  <main>
+    <!-- TODAY -->
+    <section class="view" id="view-today">
+      <div class="controls" id="controls"></div>
+      <p class="statusline" id="statusline"></p>
+      <div id="board"></div>
+      <div class="actions" id="actions">
+        <button class="btn btn-primary" id="checkBtn" type="button">Check now</button>
+        <button class="btn" id="leaveBtn" type="button">I'm leaving <span aria-hidden="true">→</span></button>
+      </div>
+    </section>
+
+    <!-- TRIP IN PROGRESS -->
+    <section class="view hidden" id="view-trip">
+      <p class="label" id="tripLabel"></p>
+      <div class="timer mono" id="tripTimer">0:00</div>
+      <div class="progress"><div class="progress-bar" id="tripBar"></div></div>
+      <p class="trip-meta" id="tripMeta"></p>
+      <div id="tripStrip"></div>
+      <div class="trip-actions">
+        <button class="btn btn-primary btn-xl" id="arrivedBtn" type="button">Arrived</button>
+        <button class="btn btn-ghost" id="cancelTripBtn" type="button">Cancel trip</button>
+      </div>
+    </section>
+
+    <!-- TRIPS -->
+    <section class="view hidden" id="view-trips">
+      <h1 class="h1">Trips</h1>
+      <div id="tiles"></div>
+      <h2 class="h2">Recent</h2>
+      <ul class="trip-list" id="tripList"></ul>
+      <div class="row">
+        <button class="btn btn-small" id="exportCsv" type="button">Export CSV</button>
+        <button class="btn btn-small btn-ghost" id="clearLog" type="button">Clear log</button>
+      </div>
+    </section>
+
+    <!-- SETUP -->
+    <section class="view hidden" id="view-setup">
+      <h1 class="h1" id="setupTitle">Setup</h1>
+      <p class="muted" id="setupIntro">Saved only in this browser. The site's code is public, but your addresses never leave your phone except in requests to TfL.</p>
+      <div class="steps hidden" id="stepDots" aria-hidden="true"><span></span><span></span><span></span></div>
+
+      <div class="group" data-step="1">
+        <h2 class="h2">The two of you</h2>
+        <div class="field-pair">
+          <label class="field"><span>Name</span><input type="text" id="s-name-a" placeholder="e.g. Billy" autocomplete="off"></label>
+          <label class="field"><span>Partner</span><input type="text" id="s-name-b" placeholder="e.g. Sam" autocomplete="off"></label>
+        </div>
+        <div class="field">
+          <span>This phone belongs to</span>
+          <div class="seg" id="s-self"></div>
+        </div>
+      </div>
+
+      <div class="group" data-step="2">
+        <h2 class="h2">Places</h2>
+        <p class="muted small">Postcodes work best. "Here" uses your current location.</p>
+        <label class="field"><span>Home</span>
+          <div class="inline"><input type="text" id="s-home" placeholder="e.g. N1 9GU" autocomplete="postal-code"><button class="btn btn-small" type="button" data-geo="s-home">Here</button></div>
+        </label>
+        <label class="field"><span id="l-office-a">Office</span>
+          <div class="inline"><input type="text" id="s-office-a" placeholder="e.g. EC2M 7PY" autocomplete="off"><button class="btn btn-small" type="button" data-geo="s-office-a">Here</button></div>
+        </label>
+        <label class="field"><span id="l-office-b">Partner's office</span>
+          <div class="inline"><input type="text" id="s-office-b" placeholder="e.g. W1T 1JY" autocomplete="off"><button class="btn btn-small" type="button" data-geo="s-office-b">Here</button></div>
+        </label>
+      </div>
+
+      <div class="group" data-step="3">
+        <h2 class="h2">Commute times</h2>
+        <p class="muted small">Opening the app in the hour around these times checks TfL once. Outside them, nothing is fetched until you tap Check.</p>
+        <div id="s-commute"></div>
+      </div>
+
+      <div class="group" data-step="extra">
+        <h2 class="h2">Getting around</h2>
+        <div class="chips" id="s-modes"></div>
+        <div class="field">
+          <span>Prefer</span>
+          <div class="seg" id="s-pref"></div>
+        </div>
+      </div>
+
+      <div class="group" data-step="extra">
+        <h2 class="h2">Send to your partner</h2>
+        <p class="muted small">Shares names, places and commute times (not your app key). Send the link privately — it contains your addresses.</p>
+        <div class="row">
+          <button class="btn btn-small" id="shareLink" type="button">Share link</button>
+          <button class="btn btn-small" id="copyCode" type="button">Copy code</button>
+        </div>
+        <label class="field"><span>Or paste a code</span>
+          <div class="inline"><input type="text" id="importInput" placeholder="Paste code" autocomplete="off"><button class="btn btn-small" id="importBtn" type="button">Import</button></div>
+        </label>
+      </div>
+
+      <details class="group advanced" data-step="extra">
+        <summary class="h2">Advanced</summary>
+        <label class="field"><span>TfL app key (optional — raises the rate limit; free at api-portal.tfl.gov.uk)</span>
+          <input type="password" id="s-key" placeholder="Anonymous access" autocomplete="off">
+        </label>
+        <div class="field">
+          <span>Theme</span>
+          <div class="seg" id="s-theme"></div>
+        </div>
+        <button class="btn btn-small btn-ghost danger" id="resetAll" type="button">Erase everything on this phone</button>
+      </details>
+
+      <div class="step-nav hidden" id="stepNav">
+        <button class="btn btn-ghost" id="stepBack" type="button">Back</button>
+        <button class="btn btn-primary" id="stepNext" type="button">Next</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">Powered by TfL Open Data. Contains OS data © Crown copyright and database rights.</footer>
+
+  <nav class="tabs" aria-label="Sections">
+    <a href="#today" data-tab="today">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h12M12 6l6 6-6 6"/></svg><span>Today</span>
+    </a>
+    <a href="#trips" data-tab="trips">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V11M12 19V5M19 19v-6"/></svg><span>Trips</span>
+    </a>
+    <a href="#setup" data-tab="setup">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg><span>Setup</span>
+    </a>
+  </nav>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
