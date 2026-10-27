@@ -165,7 +165,7 @@ function crowdLabel(v) {
 }
 
 // ---------- direction ----------
-// Mornings default to the office, afternoons to home; the header pill flips it.
+// Mornings default to the office, afternoons to home; the swap button flips it.
 const autoDir = () => (now().getHours() < 13 ? "work" : "home");
 
 // ---------- view state ----------
@@ -362,16 +362,21 @@ function renderLive(leg, live) {
 function renderHeader() {
   const t = now();
   $("date").textContent = t.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }).toUpperCase();
-  const solo = !settings.names[other(device.self)] && !settings.office[other(device.self)];
-  $("whoPill").textContent = name(state.who);
-  $("whoPill").disabled = solo;
-  $("dirPill").textContent = "→ " + (dir() === "work" ? "Office" : "Home");
+  $("whoSeg").innerHTML = [device.self, other(device.self)].map((p) =>
+    `<button type="button" data-who="${p}" class="${p === state.who ? "on" : ""}" aria-pressed="${p === state.who}">${esc(name(p))}</button>`).join("");
 }
 
-function renderControls() {
-  $("controls").innerHTML = configured()
-    ? `<button type="button" class="toggle${state.fromHere ? " on" : ""}" data-fromhere aria-pressed="${state.fromHere}">From my location</button>`
-    : "";
+// The journey as a headline: HOME → OFFICE with the postcodes underneath.
+function renderRoute() {
+  const d = dir(), ends = endpoints(state.who, d);
+  const place = (v) => (/^-?\d+\.\d+,-?\d+\.\d+$/.test(v) ? "Pinned location" : String(v || "Not set").toUpperCase());
+  $("routeFrom").textContent = state.fromHere ? "Here" : d === "work" ? "Home" : "Office";
+  $("routeFromSub").textContent = state.fromHere ? "Your location" : place(ends.from);
+  $("fromBtn").setAttribute("aria-pressed", state.fromHere);
+  $("fromBtn").title = state.fromHere ? `Tap to start from ${d === "work" ? "home" : "the office"}` : "Tap to start from your current location";
+  $("routeTo").textContent = d === "work" ? "Office" : "Home";
+  $("routeToSub").textContent = place(ends.to);
+  $("route").classList.toggle("hidden", !configured());
 }
 
 function renderStatusline(c) {
@@ -392,7 +397,7 @@ function renderToday() {
   if (activeTrip()) { showTripView(); return; }
   $("view-trip").classList.add("hidden");
   if (currentTab() === "today") $("view-today").classList.remove("hidden");
-  renderControls();
+  renderRoute();
   const d = dir();
   const c = store.get(cacheKey(state.who, d), null);
   renderStatusline(configured() ? c : null);
@@ -522,7 +527,7 @@ function sparkline(trips) {
 function renderTrips() {
   const log = store.get("log", []);
   if (!log.length) {
-    $("tiles").innerHTML = `<div class="empty"><h2>No trips yet</h2><p>Tap <b>I'm leaving</b> when you head out and <b>Arrived</b> when you get there. Averages and a chart build up here.</p></div>`;
+    $("tiles").innerHTML = `<div class="empty"><h2>No trips yet</h2><p>Tap <b>Time this trip</b> when you head out and <b>Arrived</b> when you get there. Averages and a chart build up here, on this phone only.</p></div>`;
     $("tripList").innerHTML = ""; return;
   }
   const groups = {};
@@ -691,13 +696,17 @@ $("cancelTripBtn").onclick = () => { if (confirm("Cancel this trip without loggi
 // Switching person, direction or start point only shows that combination's last result.
 // Fetching is always an explicit tap on Check now.
 function changed() { state.sel = 0; state.error = ""; renderToday(); }
-$("whoPill").onclick = () => { state.who = other(state.who); changed(); };
-$("dirPill").onclick = () => { state.dir = dir() === "work" ? "home" : "work"; changed(); };
-$("controls").onclick = (e) => {
-  const b = e.target.closest("button"); if (!b) return;
-  if ("fromhere" in b.dataset) state.fromHere = !state.fromHere;
+$("whoSeg").onclick = (e) => {
+  const b = e.target.closest("[data-who]");
+  if (!b || b.dataset.who === state.who) return;
+  state.who = b.dataset.who; changed();
+};
+$("swapBtn").onclick = () => {
+  state.dir = dir() === "work" ? "home" : "work";
+  $("swapBtn").classList.toggle("flipped");
   changed();
 };
+$("fromBtn").onclick = () => { state.fromHere = !state.fromHere; changed(); };
 $("board").addEventListener("click", (e) => {
   const alt = e.target.closest("[data-sel]");
   if (alt) { state.sel = +alt.dataset.sel; renderToday(); window.scrollTo({ top: 0, behavior: "smooth" }); return; }
@@ -721,6 +730,7 @@ function showTab() {
   if (!device.onboarded && !configured() && currentTab() !== "setup") { location.hash = "#setup"; return; }
   if (configured() && !device.onboarded) { device.onboarded = true; saveDevice(); }
   const tab = currentTab();
+  document.body.dataset.tab = tab;
   if (tab !== showTab.last) { window.scrollTo(0, 0); showTab.last = tab; }
   ["today", "trips", "setup"].forEach((t) => $("view-" + t).classList.toggle("hidden", t !== tab));
   $("view-trip").classList.add("hidden");

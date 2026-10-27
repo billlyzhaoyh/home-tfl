@@ -23,21 +23,28 @@
 <div class="app">
   <header class="top">
     <div class="date mono" id="date"></div>
-    <div class="pills">
-      <button class="pill" id="whoPill" type="button" aria-label="Whose commute"></button>
-      <button class="pill pill-dir" id="dirPill" type="button" aria-label="Direction"></button>
-    </div>
+    <div class="seg seg-who" id="whoSeg" role="group" aria-label="Whose commute"></div>
   </header>
 
   <main>
     <!-- TODAY -->
     <section class="view" id="view-today">
-      <div class="controls" id="controls"></div>
+      <div class="route" id="route">
+        <button class="route-end route-from" id="fromBtn" type="button" aria-pressed="false" title="Tap to start from your current location">
+          <span class="route-place" id="routeFrom"></span>
+          <span class="route-sub mono"><svg class="pin" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6-5.6-6-11a6 6 0 0 1 12 0c0 5.4-6 11-6 11z"/><circle cx="12" cy="10" r="2"/></svg><span id="routeFromSub"></span></span>
+        </button>
+        <div class="route-line" aria-hidden="true"></div>
+        <div class="route-end route-to"><span class="route-place" id="routeTo"></span><span class="route-sub mono" id="routeToSub"></span></div>
+        <button class="swap" id="swapBtn" type="button" aria-label="Swap direction">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4"/></svg>
+        </button>
+      </div>
       <p class="statusline" id="statusline"></p>
       <div id="board"></div>
       <div class="actions" id="actions">
         <button class="btn btn-primary" id="checkBtn" type="button">Check now</button>
-        <button class="btn" id="leaveBtn" type="button">I'm leaving <span aria-hidden="true">→</span></button>
+        <button class="btn" id="leaveBtn" type="button">Time this trip</button>
       </div>
     </section>
 
@@ -48,6 +55,7 @@
       <div class="progress"><div class="progress-bar" id="tripBar"></div></div>
       <p class="trip-meta" id="tripMeta"></p>
       <div id="tripStrip"></div>
+      <p class="hint trip-hint">Tap Arrived when you get there to log how long it really took. It's saved to Trips on this phone only — nothing is sent anywhere.</p>
       <div class="trip-actions">
         <button class="btn btn-primary btn-xl" id="arrivedBtn" type="button">Arrived</button>
         <button class="btn btn-ghost" id="cancelTripBtn" type="button">Cancel trip</button>

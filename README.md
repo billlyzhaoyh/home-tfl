@@ -5,8 +5,8 @@ A small commute board for two people in London: **when to leave, which line, and
 ## What it does
 
 - **Today** shows a big *Leave 08:17 · arrive 08:52* for the best route, a strip of the route coloured by line (segment width = time on that leg), the status of the lines you'll use, and the next trains at your first station with a plain-English note ("Big gap after the next train — catch this one"). Other options sit below it; tap one to swap it in.
-- The header pills pick **whose** commute and the **direction** (it defaults to the office before 1pm and home after, and you can tap to flip it).
-- **I'm leaving → Arrived** times the real trip. **Trips** shows averages vs plan and a chart of recent trips per person and direction.
+- The journey is the headline, **HOME → OFFICE**, with a swap button. It defaults to the office before 1pm and home after. Tap the start point to plan from your current location instead. A **Billy | Erica** switch picks whose commute.
+- **Time this trip → Arrived** logs how long the trip really took (on that phone only). **Trips** shows averages vs plan and a chart of recent trips per person and direction.
 - **Setup** holds names, home and offices, transport modes, and a share link to copy everything to your partner's phone.
 
 ## When it talks to TfL
@@ -16,7 +16,7 @@ Only when you tap a button. There's no polling and nothing fetches on open:
 - **Check now** makes about 2–4 requests: journey plan, line status, and arrivals plus crowding for the first station. Live trains are skipped when departure is more than 30 min away.
 - **Refresh trains** reloads only the next trains for the selected route (2 requests).
 
-Switching person, direction or "From my location" just shows that combination's last result until you tap Check.
+Switching person, direction or start point just shows that combination's last result until you tap Check.
 
 **Next step:** commute times (e.g. "arrive by 09:00"), so the app can plan for when you need to be at work and check once when opened around then.
 
