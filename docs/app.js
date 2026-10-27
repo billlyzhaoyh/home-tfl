@@ -103,25 +103,37 @@ const norm = (s) => String(s || "").toLowerCase()
   .replace(/\b(underground|rail|dlr|overground|elizabeth line)\b/g, "")
   .replace(/\bstation\b/g, "").replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
 
-// Pick the arrivals for this leg's direction: keep platforms where at least one train
-// heads to one of the leg's listed destinations. Falls back to every platform.
+// Pick the arrivals for this leg's direction. Trains are grouped by direction
+// ("Eastbound - Platform 2" -> "Eastbound") so a terminus with several platforms reads as
+// one list. Trains terminating here are dropped (at a terminus TfL lists them with both
+// destination and "towards" set to this station), as are duplicate listings of one train.
+// Keeps directions where at least one train heads to the leg's listed destinations,
+// falling back to every direction.
 function pickArrivals(arrivals, leg) {
-  const onLine = arrivals.filter((a) => !leg.line || a.lineId === leg.line);
+  const here = norm(leg.from);
+  const isHere = (s) => { const n = norm(s); return !n || here.startsWith(n) || n.startsWith(here); };
+  const groupOf = (a) => (a.platformName || "?").split(" - ")[0].trim();
+  const seen = new Set();
+  const departing = arrivals
+    .filter((a) => (!leg.line || a.lineId === leg.line) && !(isHere(a.destinationName) && isHere(a.towards)))
+    .sort((a, b) => a.timeToStation - b.timeToStation)
+    .filter((a) => {
+      const k = [groupOf(a), a.vehicleId || a.id, Math.round(a.timeToStation / 60)].join("|");
+      return !seen.has(k) && seen.add(k);
+    });
   const dirs = leg.directions.map(norm).filter(Boolean);
-  const byPlatform = {};
-  onLine.forEach((a) => (byPlatform[a.platformName || "?"] ||= []).push(a));
+  const byGroup = {};
+  departing.forEach((a) => (byGroup[groupOf(a)] ||= []).push(a));
   const matches = (a) => dirs.some((d) => {
     const dest = norm(a.destinationName), tow = norm(a.towards);
     return (dest && (dest.includes(d) || d.includes(dest))) || (tow && tow.includes(d));
   });
-  let platforms = Object.entries(byPlatform).filter(([, list]) => list.some(matches));
-  const matched = platforms.length > 0;
-  if (!matched) platforms = Object.entries(byPlatform);
+  let groups = Object.entries(byGroup).filter(([, list]) => list.some(matches));
+  const matched = groups.length > 0;
+  if (!matched) groups = Object.entries(byGroup);
   return {
     matched,
-    platforms: platforms.slice(0, 2).map(([name, list]) => ({
-      name, trains: list.sort((a, b) => a.timeToStation - b.timeToStation).slice(0, 4)
-    }))
+    platforms: groups.slice(0, 2).map(([name, list]) => ({ name, trains: list.slice(0, 4) }))
   };
 }
 
