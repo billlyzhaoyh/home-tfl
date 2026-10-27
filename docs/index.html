@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<meta name="description" content="A two-person London commute board: leave-by times, line status and live trains, fetched only when you need them.">
+<meta name="description" content="A two-person London commute board: when to leave, line status and live trains, fetched only when you tap Check.">
 <meta name="theme-color" content="#0c0d0f">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -70,7 +70,7 @@
     <section class="view hidden" id="view-setup">
       <h1 class="h1" id="setupTitle">Setup</h1>
       <p class="muted" id="setupIntro">Saved only in this browser. The site's code is public, but your addresses never leave your phone except in requests to TfL.</p>
-      <div class="steps hidden" id="stepDots" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="steps hidden" id="stepDots" aria-hidden="true"><span></span><span></span></div>
 
       <div class="group" data-step="1">
         <h2 class="h2">The two of you</h2>
@@ -98,12 +98,6 @@
         </label>
       </div>
 
-      <div class="group" data-step="3">
-        <h2 class="h2">Commute times</h2>
-        <p class="muted small">Opening the app in the hour around these times checks TfL once. Outside them, nothing is fetched until you tap Check.</p>
-        <div id="s-commute"></div>
-      </div>
-
       <div class="group" data-step="extra">
         <h2 class="h2">Getting around</h2>
         <div class="chips" id="s-modes"></div>
@@ -115,7 +109,7 @@
 
       <div class="group" data-step="extra">
         <h2 class="h2">Send to your partner</h2>
-        <p class="muted small">Shares names, places and commute times (not your app key). Send the link privately — it contains your addresses.</p>
+        <p class="muted small">Shares names, places and transport settings (not your app key). Send the link privately — it contains your addresses.</p>
         <div class="row">
           <button class="btn btn-small" id="shareLink" type="button">Share link</button>
           <button class="btn btn-small" id="copyCode" type="button">Copy code</button>

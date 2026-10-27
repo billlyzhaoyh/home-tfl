@@ -102,7 +102,8 @@ a { color: inherit; }
 /* route strip: one segment per leg, width proportional to duration */
 .strip { display: flex; gap: 2px; margin: 18px 0 4px; }
 .seg-leg { min-width: 14px; display: flex; flex-direction: column; gap: 6px; }
-.seg-leg .bar { height: 12px; border-radius: 4px; background: var(--c, var(--muted)); }
+.seg-leg .bar { height: 12px; border-radius: 4px; background: var(--c, var(--muted)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 16%, transparent); }
+/* keeps dark line colours (Northern is black) visible on the dark surface */
 .seg-leg.walk .bar { background: none; border-top: 3px dotted var(--walk); height: 0; margin-top: 4.5px; margin-bottom: 4.5px; border-radius: 0; }
 .seg-leg .name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .seg-leg.walk .name { color: var(--muted); font-weight: 500; }
@@ -231,19 +232,6 @@ input:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visibl
 .chip i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); display: inline-block; opacity: .45; }
 .chip.on { color: var(--fg); border-color: var(--fg); }
 .chip.on i { opacity: 1; }
-.commute-person { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 14px; margin: 10px 0; }
-.commute-person h3 { font-size: 15px; margin: 12px 0 2px; }
-.commute-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
-.commute-row:last-child { border-bottom: 0; }
-.commute-row .what { font-size: 14px; font-weight: 600; }
-.commute-row .ctl { display: flex; gap: 6px; align-items: center; }
-.commute-row input[type=time] { width: 108px; height: 38px; font-family: var(--mono); font-size: 15px; }
-.commute-row .days { grid-column: 1 / -1; display: flex; gap: 4px; }
-.day {
-  width: 34px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: transparent;
-  font-size: 12px; font-weight: 600; color: var(--muted); padding: 0;
-}
-.day.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 .advanced summary { cursor: pointer; list-style: none; }
 .advanced summary::-webkit-details-marker { display: none; }
 .advanced summary::after { content: " +"; }
@@ -286,5 +274,4 @@ body.onboarding .advanced { display: none; }
 }
 @media (max-width: 360px) {
   .seg button { padding: 6px 8px; }
-  .commute-row input[type=time] { width: 96px; }
 }

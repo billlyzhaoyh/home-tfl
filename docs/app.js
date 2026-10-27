@@ -11,7 +11,6 @@ const store = {
 };
 
 const PEOPLE = ["a", "b"];
-const DIRS = ["work", "home"];
 const MODES = [
   { id: "tube", label: "Tube", c: "#0098D4" },
   { id: "elizabeth-line", label: "Elizabeth line", c: "#6950A1" },
@@ -23,21 +22,11 @@ const MODES = [
 ];
 const PREFS = [["leasttime", "Fastest"], ["leastinterchange", "Fewest changes"], ["leastwalking", "Least walking"]];
 
-const defaultCommute = () => ({
-  work: { time: "09:00", timeIs: "Arriving", days: [1, 2, 3, 4, 5] },
-  home: { time: "18:00", timeIs: "Departing", days: [1, 2, 3, 4, 5] }
-});
-
 function normaliseSettings(s = {}) {
-  const d = defaultCommute();
   return {
     names: { a: "", b: "", ...s.names },
     home: s.home || "",
     office: { a: "", b: "", ...s.office },
-    commute: Object.fromEntries(PEOPLE.map((p) => [p, {
-      work: { ...d.work, ...s.commute?.[p]?.work },
-      home: { ...d.home, ...s.commute?.[p]?.home }
-    }])),
     modes: Array.isArray(s.modes) && s.modes.length ? s.modes : ["tube", "elizabeth-line", "dlr", "overground"],
     pref: s.pref || "leasttime",
     key: s.key || ""
@@ -55,7 +44,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const pad = (n) => String(n).padStart(2, "0");
 const MIN = 60000;
 
-// ?now=08:05 fakes the clock (for testing the commute-window rules).
+// ?now=08:05 fakes the clock (for testing the time-of-day direction default).
 const CLOCK_OFFSET = (() => {
   const m = new URLSearchParams(location.search).get("now")?.match(/^(\d{1,2}):(\d{2})$/);
   if (!m) return 0;
@@ -66,7 +55,6 @@ const nowMs = () => Date.now() + CLOCK_OFFSET;
 const now = () => new Date(nowMs());
 const hm = (d) => pad(d.getHours()) + ":" + pad(d.getMinutes());
 const hhmm = (iso) => (iso || "").slice(11, 16);
-const atTime = (str, base = now()) => { const [h, m] = str.split(":").map(Number); const d = new Date(base); d.setHours(h, m, 0, 0); return d; };
 const minsUntil = (d) => Math.round((new Date(d) - now()) / MIN);
 const relMins = (m) => m <= 0 ? (m >= -1 ? "now" : `${-m} min ago`) : m < 60 ? `in ${m} min` : `in ${Math.floor(m / 60)} h ${m % 60} min`;
 
@@ -164,46 +152,14 @@ function crowdLabel(v) {
   return { pct: Math.round(pct), level: lvl[0], text: lvl[1] };
 }
 
-// ---------- commute windows ----------
-// A window is the stretch of time in which opening the app checks TfL once.
-// Leave time = the set time (Departing), or the set time minus a typical trip (Arriving).
-function typicalMins(who, dir) {
-  const c = store.get(cacheKey(who, dir), null);
-  if (c?.journeys?.[0]) return c.journeys[0].duration;
-  const log = store.get("log", []).filter((t) => t.who === who && t.dir === dir).slice(0, 10);
-  return log.length ? Math.round(log.reduce((a, t) => a + t.mins, 0) / log.length) : 45;
-}
-function commuteWindow(who, dir, at = now()) {
-  const c = settings.commute[who]?.[dir];
-  if (!c?.time || !c.days?.includes(at.getDay())) return null;
-  const target = atTime(c.time, at);
-  const leave = c.timeIs === "Arriving" ? new Date(target - typicalMins(who, dir) * MIN) : target;
-  return { leave, target, start: new Date(leave - 45 * MIN), end: new Date(+leave + 15 * MIN), c };
-}
-const inWindow = (w, at = now()) => Boolean(w && at >= w.start && at <= w.end);
-
-function autoDir(who) {
-  const t = now();
-  for (const d of DIRS) if (inWindow(commuteWindow(who, d, t), t)) return d;
-  const w = commuteWindow(who, "work", t);
-  if (w) return t < w.end ? "work" : "home";
-  return t.getHours() < 13 ? "work" : "home";
-}
-// Plan for the set commute time while it's still ahead; otherwise plan for leaving now.
-function autoPlan(who, dir) {
-  const w = commuteWindow(who, dir);
-  return w && now() < new Date(w.leave - 2 * MIN) ? "planned" : "now";
-}
+// ---------- direction ----------
+// Mornings default to the office, afternoons to home; the header pill flips it.
+const autoDir = () => (now().getHours() < 13 ? "work" : "home");
 
 // ---------- view state ----------
-const state = { who: device.self, dir: null, plan: null, fromHere: false, sel: 0, busy: false, liveBusy: false, othersOpen: false, error: "" };
-const dir = () => state.dir || autoDir(state.who);
-const plan = () => {
-  const p = state.plan || autoPlan(state.who, dir());
-  return p === "planned" && !commuteWindow(state.who, dir()) ? "now" : p;
-};
+const state = { who: device.self, dir: null, fromHere: false, sel: 0, busy: false, liveBusy: false, othersOpen: false, error: "" };
+const dir = () => state.dir || autoDir();
 const cacheKey = (who, d) => `cache.${who}.${d}`;
-const ctxKey = () => [state.who, dir(), plan(), state.fromHere ? "here" : "base"].join("|");
 
 function endpoints(who, d) {
   return d === "work"
@@ -211,15 +167,14 @@ function endpoints(who, d) {
     : { from: settings.office[who], to: settings.home, fromName: "office" };
 }
 
-function journeyParams(who, d, p) {
-  const c = settings.commute[who][d];
-  const at = p === "planned" ? atTime(c.time) : now();
+function journeyParams() {
+  const at = now();
   return {
     mode: [...settings.modes, "walking"].join(","),
     journeyPreference: settings.pref,
     date: `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}`,
     time: pad(at.getHours()) + pad(at.getMinutes()),
-    timeIs: p === "planned" ? c.timeIs : "Departing"
+    timeIs: "Departing"
   };
 }
 
@@ -238,12 +193,9 @@ function slim(j) {
     })
   };
 }
-function rank(journeys, timeIs) {
-  const js = journeys.slice();
-  // Arrive-by: the latest departure that still makes it. Otherwise: the earliest arrival.
-  if (timeIs === "Arriving") js.sort((a, b) => b.start.localeCompare(a.start) || a.duration - b.duration);
-  else js.sort((a, b) => a.end.localeCompare(b.end) || a.duration - b.duration);
-  return js.slice(0, 4);
+function rank(journeys) {
+  // Earliest arrival first.
+  return journeys.slice().sort((a, b) => a.end.localeCompare(b.end) || a.duration - b.duration).slice(0, 4);
 }
 const firstRail = (j) => j.legs.find((l) => RAIL.has(l.mode) && l.naptan);
 const liveKey = (leg) => leg.naptan + "|" + leg.line;
@@ -294,7 +246,7 @@ async function planJourney(from, to, params) {
 // ---------- checking TfL (the only places that fetch) ----------
 async function check() {
   if (state.busy) return;
-  const who = state.who, d = dir(), p = plan(), key = ctxKey();
+  const who = state.who, d = dir();
   const ends = endpoints(who, d);
   if (!ends.from || !ends.to) { renderToday(); return; }
   state.busy = true; state.error = ""; renderToday();
@@ -304,9 +256,9 @@ async function check() {
       try { from = await getLocation(); fromName = "your location"; }
       catch (e) { toast(`Location unavailable — using ${ends.fromName}`); }
     }
-    const params = journeyParams(who, d, p);
+    const params = journeyParams();
     const jr = await planJourney(from, ends.to, params);
-    const journeys = rank((jr.journeys || []).map(slim), params.timeIs);
+    const journeys = rank((jr.journeys || []).map(slim));
     const liveLegs = {};
     journeys.forEach((j) => { const l = firstRail(j); if (l && dueSoon(l)) liveLegs[liveKey(l)] = l; });
     const [lines, live] = await Promise.all([
@@ -317,7 +269,7 @@ async function check() {
       const s = l.lineStatuses?.[0] || {};
       return { id: l.id, name: l.name, sev: s.statusSeverity, desc: s.statusSeverityDescription, reason: (s.reason || "").replace(/^.*?:\s*/, "").slice(0, 200) };
     });
-    store.set(cacheKey(who, d), { at: nowMs(), key, plan: p, timeIs: params.timeIs, fromName, journeys, status, live });
+    store.set(cacheKey(who, d), { at: nowMs(), fromName, journeys, status, live });
     state.sel = 0;
   } catch (e) {
     state.error = e.code === 300
@@ -338,16 +290,6 @@ async function refreshTrains(leg) {
     c.live = { ...c.live, ...(await loadLiveFor([leg])) };
     store.set(cacheKey(state.who, dir()), c);
   } finally { state.liveBusy = false; renderToday(); }
-}
-
-// Opening the app inside a commute window checks once, unless a fresh result exists.
-function maybeAutoCheck() {
-  if (!configured() || activeTrip() || state.busy) return;
-  const w = commuteWindow(state.who, dir());
-  if (!inWindow(w)) return;
-  const c = store.get(cacheKey(state.who, dir()), null);
-  if (c && c.key === ctxKey() && nowMs() - c.at < 10 * MIN) return;
-  check();
 }
 
 // ---------- rendering: shared pieces ----------
@@ -415,17 +357,9 @@ function renderHeader() {
 }
 
 function renderControls() {
-  const w = commuteWindow(state.who, dir());
-  const p = plan();
-  let html = "";
-  if (w) {
-    const lbl = (w.c.timeIs === "Arriving" ? "Arrive by " : "Leave at ") + w.c.time;
-    html += `<div class="seg" role="group" aria-label="When">
-      <button type="button" data-plan="now" class="${p === "now" ? "on" : ""}">Leave now</button>
-      <button type="button" data-plan="planned" class="${p === "planned" ? "on" : ""}">${esc(lbl)}</button></div>`;
-  }
-  html += `<button type="button" class="toggle${state.fromHere ? " on" : ""}" data-fromhere aria-pressed="${state.fromHere}">From here</button>`;
-  $("controls").innerHTML = configured() ? html : "";
+  $("controls").innerHTML = configured()
+    ? `<button type="button" class="toggle${state.fromHere ? " on" : ""}" data-fromhere aria-pressed="${state.fromHere}">From my location</button>`
+    : "";
 }
 
 function renderStatusline(c) {
@@ -437,13 +371,7 @@ function renderStatusline(c) {
     const day = when.toDateString() === now().toDateString() ? "" : " " + when.toLocaleDateString("en-GB", { weekday: "short" });
     bits.push(`<span class="${age > 15 ? "stale" : ""}">Checked ${hm(when)}${day}${age > 1 && age < 120 ? ` (${age} min ago)` : ""}</span>`);
   } else bits.push("Not checked yet");
-  // Tell people when the app will (and won't) fetch by itself.
-  const w = commuteWindow(state.who, dir());
-  if (inWindow(w)) bits.push(`Auto-checks on open until ${hm(w.end)}`);
-  else {
-    const next = DIRS.map((d) => commuteWindow(state.who, d)).filter((x) => x && x.start > now()).sort((a, b) => a.start - b.start)[0];
-    bits.push(next ? `Next auto-check from ${hm(next.start)}` : "Fetches only when you tap Check");
-  }
+  bits.push("Updates only when you tap Check");
   $("statusline").innerHTML = bits.map((b) => `<span>${b}</span>`).join('<span aria-hidden="true">·</span>');
 }
 
@@ -482,7 +410,7 @@ function renderToday() {
   const statusById = Object.fromEntries(c.status.map((s) => [s.id, s]));
   const leaveIn = minsUntil(j.start);
   const past = leaveIn < -1;
-  const label = c.timeIs === "Arriving" ? "Leave by" : "Leave";
+  const label = "Leave";
   const rail = firstRail(j);
   const routeLines = new Set(c.journeys.flatMap((x) => x.legs.map((l) => l.line)).filter(Boolean));
   const othersBad = c.status.filter((s) => s.sev !== 10 && !routeLines.has(s.id));
@@ -625,7 +553,6 @@ $("exportCsv").onclick = () => {
 $("clearLog").onclick = () => { if (confirm("Delete all logged trips on this phone?")) { store.set("log", []); renderTrips(); } };
 
 // ---------- Setup ----------
-const DAY_LETTERS = [[1, "M"], [2, "T"], [3, "W"], [4, "T"], [5, "F"], [6, "S"], [0, "S"]];
 
 function segButtons(el, options, current, attr) {
   el.innerHTML = options.map(([v, l]) => `<button type="button" data-${attr}="${v}" class="${v === current ? "on" : ""}">${esc(l)}</button>`).join("");
@@ -641,19 +568,6 @@ function renderSetup() {
   segButtons($("s-pref"), PREFS, settings.pref, "pref");
   segButtons($("s-theme"), [["system", "System"], ["dark", "Dark"], ["light", "Light"]], device.theme, "theme");
   $("s-modes").innerHTML = MODES.map((m) => `<button type="button" class="chip${settings.modes.includes(m.id) ? " on" : ""}" data-mode="${m.id}" aria-pressed="${settings.modes.includes(m.id)}" style="--c:${m.c}"><i></i>${m.label}</button>`).join("");
-  const people = [device.self, other(device.self)].filter((p) => settings.office[p] || p === device.self);
-  $("s-commute").innerHTML = people.map((p) => `<div class="commute-person"><h3>${esc(settings.names[p] || (p === device.self ? "You" : "Partner"))}</h3>` +
-    DIRS.map((d) => {
-      const c = settings.commute[p][d];
-      return `<div class="commute-row" data-p="${p}" data-d="${d}">
-        <span class="what">To ${placeLabel(d)}</span>
-        <span class="ctl">
-          <span class="seg"><button type="button" data-timeis="Departing" class="${c.timeIs === "Departing" ? "on" : ""}">Leave</button><button type="button" data-timeis="Arriving" class="${c.timeIs === "Arriving" ? "on" : ""}">Arrive</button></span>
-          <input type="time" value="${esc(c.time)}" data-time aria-label="${placeLabel(d)} time">
-        </span>
-        <div class="days">${DAY_LETTERS.map(([n, l]) => `<button type="button" class="day${c.days.includes(n) ? " on" : ""}" data-day="${n}" aria-pressed="${c.days.includes(n)}">${l}</button>`).join("")}</div>
-      </div>`;
-    }).join("") + `</div>`).join("");
   renderStep();
 }
 
@@ -670,15 +584,9 @@ function saved() { clearTimeout(savedFlash); savedFlash = setTimeout(() => toast
 
 $("view-setup").addEventListener("change", (e) => {
   if (e.target.matches("input[type=text], input[type=password]")) { readTextFields(); renderSetup(); saved(); }
-  if (e.target.matches("[data-time]")) {
-    const row = e.target.closest(".commute-row");
-    settings.commute[row.dataset.p][row.dataset.d].time = e.target.value || settings.commute[row.dataset.p][row.dataset.d].time;
-    saveSettings(); saved();
-  }
 });
 $("view-setup").addEventListener("click", async (e) => {
   const t = e.target.closest("button"); if (!t) return;
-  const row = t.closest(".commute-row");
   if (t.dataset.self) { device.self = t.dataset.self; state.who = device.self; saveDevice(); renderSetup(); }
   else if (t.dataset.pref) { settings.pref = t.dataset.pref; saveSettings(); renderSetup(); saved(); }
   else if (t.dataset.theme) { device.theme = t.dataset.theme; saveDevice(); applyTheme(); renderSetup(); }
@@ -686,12 +594,6 @@ $("view-setup").addEventListener("click", async (e) => {
     const m = t.dataset.mode, on = settings.modes.includes(m);
     if (on && settings.modes.length === 1) { toast("Keep at least one"); return; }
     settings.modes = on ? settings.modes.filter((x) => x !== m) : [...settings.modes, m];
-    saveSettings(); renderSetup(); saved();
-  } else if (row && t.dataset.timeis) {
-    settings.commute[row.dataset.p][row.dataset.d].timeIs = t.dataset.timeis; saveSettings(); renderSetup(); saved();
-  } else if (row && t.dataset.day) {
-    const c = settings.commute[row.dataset.p][row.dataset.d], n = +t.dataset.day;
-    c.days = c.days.includes(n) ? c.days.filter((x) => x !== n) : [...c.days, n];
     saveSettings(); renderSetup(); saved();
   } else if (t.dataset.geo) {
     const label = t.textContent; t.textContent = "…"; t.disabled = true;
@@ -701,7 +603,8 @@ $("view-setup").addEventListener("click", async (e) => {
   }
 });
 
-// Onboarding: the first three groups, one at a time.
+// Onboarding: the first two groups, one at a time.
+const STEPS = 2;
 let step = 1;
 function renderStep() {
   const on = !device.onboarded;
@@ -712,16 +615,15 @@ function renderStep() {
   document.querySelectorAll("#view-setup .group").forEach((g) => g.classList.toggle("current", g.dataset.step === String(step)));
   [...$("stepDots").children].forEach((s, i) => s.classList.toggle("on", i < step));
   $("stepBack").disabled = step === 1;
-  $("stepNext").textContent = step === 3 ? "Done" : "Next";
+  $("stepNext").textContent = step === STEPS ? "Done" : "Next";
 }
 $("stepBack").onclick = () => { step = Math.max(1, step - 1); renderStep(); };
 $("stepNext").onclick = () => {
   readTextFields();
   if (step === 1 && !settings.names[device.self]) { toast("Add your name"); $("s-name-" + device.self).focus(); return; }
   if (step === 2 && (!settings.home || !settings.office[device.self])) { toast("Add home and your office"); return; }
-  if (step < 3) { step++; renderSetup(); window.scrollTo(0, 0); return; }
+  if (step < STEPS) { step++; renderSetup(); window.scrollTo(0, 0); return; }
   device.onboarded = true; saveDevice(); renderStep();
-  state.checkOnShow = true;
   location.hash = "#today";
 };
 
@@ -773,18 +675,13 @@ $("leaveBtn").onclick = startTrip;
 $("arrivedBtn").onclick = () => endTrip(true);
 $("cancelTripBtn").onclick = () => { if (confirm("Cancel this trip without logging it?")) endTrip(false); };
 
-// Changing who/direction/plan shows that combination's last result and fetches only if it's missing or stale.
-function changed() {
-  state.sel = 0; state.error = "";
-  const c = store.get(cacheKey(state.who, dir()), null);
-  if (configured() && endpoints(state.who, dir()).to && (!c || c.key !== ctxKey() || nowMs() - c.at > 10 * MIN)) check();
-  else renderToday();
-}
+// Switching person, direction or start point only shows that combination's last result.
+// Fetching is always an explicit tap on Check now.
+function changed() { state.sel = 0; state.error = ""; renderToday(); }
 $("whoPill").onclick = () => { state.who = other(state.who); changed(); };
-$("dirPill").onclick = () => { state.dir = dir() === "work" ? "home" : "work"; state.plan = null; changed(); };
+$("dirPill").onclick = () => { state.dir = dir() === "work" ? "home" : "work"; changed(); };
 $("controls").onclick = (e) => {
   const b = e.target.closest("button"); if (!b) return;
-  if (b.dataset.plan) { if (b.dataset.plan === plan()) return; state.plan = b.dataset.plan; }
   if ("fromhere" in b.dataset) state.fromHere = !state.fromHere;
   changed();
 };
@@ -815,10 +712,7 @@ function showTab() {
   ["today", "trips", "setup"].forEach((t) => $("view-" + t).classList.toggle("hidden", t !== tab));
   $("view-trip").classList.add("hidden");
   document.querySelectorAll(".tabs [data-tab]").forEach((a) => a.classList.toggle("active", a.dataset.tab === tab));
-  if (tab === "today") {
-    renderToday();
-    if (state.checkOnShow) { state.checkOnShow = false; check(); } else maybeAutoCheck();
-  }
+  if (tab === "today") renderToday();
   if (tab === "trips") renderTrips();
   if (tab === "setup") renderSetup();
   renderHeader();
@@ -833,13 +727,13 @@ function applyTheme() {
 }
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
 
-// Coming back to the app (e.g. from the home screen) counts as opening it: re-evaluate
-// the direction and run the same once-per-window rule. Nothing fetches while hidden.
+// Coming back after a while (e.g. from the home screen) re-picks the direction by time of day.
+// This only re-renders the last result; nothing is fetched.
 let hiddenAt = 0;
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") { hiddenAt = Date.now(); return; }
-  if (Date.now() - hiddenAt > 30 * MIN) { state.dir = null; state.plan = null; state.sel = 0; }
-  if (currentTab() === "today") { renderToday(); maybeAutoCheck(); }
+  if (Date.now() - hiddenAt > 30 * MIN) { state.dir = null; state.sel = 0; }
+  if (currentTab() === "today") renderToday();
 });
 // Keeps "in 12 min" labels honest. Local re-render only — no network.
 setInterval(() => { if (document.visibilityState === "visible" && currentTab() === "today" && !activeTrip()) renderToday(); }, 30000);
