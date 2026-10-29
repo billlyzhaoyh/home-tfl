@@ -9,6 +9,6 @@
     "ALLOWED_ORIGINS": "https://billlyzhaoyh.github.io,http://127.0.0.1:8765,http://localhost:8765"
   },
   "d1_databases": [
-    { "binding": "DB", "database_name": "home-tfl", "database_id": "00000000-0000-0000-0000-000000000000" }
+    { "binding": "DB", "database_name": "home-tfl", "database_id": "f005bd59-5113-4804-9b41-410f60f57b94" }
   ]
 }
