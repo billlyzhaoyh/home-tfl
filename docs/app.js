@@ -31,14 +31,41 @@ function normaliseSettings(s = {}) {
     pref: s.pref || "leasttime",
     // Extra routes to plan on every Check: change at a station, optionally onto one mode.
     routes: { a: [], b: [], ...s.routes },
-    key: s.key || ""
+    key: s.key || "",
+    updatedAt: s.updatedAt || 0
   };
 }
 
 let settings = normaliseSettings(store.get("settings", {}));
 let device = { self: "a", theme: "system", onboarded: false, ...store.get("device", {}) };
-const saveSettings = () => store.set("settings", settings);
+const saveSettings = () => { settings.updatedAt = Date.now(); store.set("settings", settings); queueSync(); };
 const saveDevice = () => store.set("device", device);
+
+// Trips are identified by person + start time, and carry an edit time for sync.
+// Older trips predate these fields, so fill them in once.
+const tripId = (t) => `${t.who}-${t.start}`;
+(function migrateLog() {
+  const log = store.get("log", []);
+  let changed = false;
+  log.forEach((t) => {
+    if (!t.id) { t.id = tripId(t); changed = true; }
+    if (!t.updatedAt) { t.updatedAt = t.end || t.start; changed = true; }
+  });
+  if (changed) store.set("log", log);
+})();
+
+// Every change to the trip log goes through saveLog so the changed ids are queued for sync.
+// Deleted trips leave a tombstone until the server has it.
+function saveLog(log, changedIds = [], deletedIds = []) {
+  store.set("log", log);
+  if (deletedIds.length) {
+    const tombs = store.get("tombstones", {});
+    deletedIds.forEach((id) => (tombs[id] = Date.now()));
+    store.set("tombstones", tombs);
+  }
+  const ids = [...changedIds, ...deletedIds];
+  if (ids.length) { store.set("outbox", [...new Set([...store.get("outbox", []), ...ids])]); queueSync(); }
+}
 
 // ---------- helpers ----------
 const $ = (id) => document.getElementById(id);
@@ -68,6 +95,123 @@ const configured = () => Boolean(settings.home && settings.office[device.self]);
 function toast(msg) {
   const t = $("toast"); t.textContent = msg; t.classList.add("show");
   clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 1800);
+}
+
+// ---------- sync (Cloudflare Worker + D1) ----------
+// The phone's storage stays the working copy; the Worker holds the shared copy for both
+// phones. Syncing talks only to the Worker: on open, a couple of seconds after a change,
+// and on "Sync now". Failed syncs keep their changes queued for next time.
+let syncing = false, syncTimer = null;
+const syncOn = () => Boolean(device.sync?.url && device.sync?.key);
+function queueSync() {
+  if (!syncOn()) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(sync, 2000);
+}
+function connectSync(url, key) {
+  device.sync = { url: url.trim().replace(/\/+$/, ""), key: key.trim(), cursor: 0, firstSync: true };
+  saveDevice();
+  // Upload everything already on this phone the first time.
+  store.set("outbox", [...new Set([...store.get("outbox", []), ...store.get("log", []).map((t) => t.id)])]);
+}
+
+async function sync() {
+  if (!syncOn() || syncing) return;
+  syncing = true; renderSyncStatus();
+  const s = device.sync;
+  const outbox = store.get("outbox", []), tombs = store.get("tombstones", {});
+  const byId = new Map(store.get("log", []).map((t) => [t.id, t]));
+  const sent = new Map(); // id -> updatedAt we sent, to know what's still pending afterwards
+  const trips = outbox.map((id) => {
+    const t = byId.get(id);
+    const row = t ? { id, data: t, updatedAt: t.updatedAt } : { id, data: null, deleted: true, updatedAt: tombs[id] || Date.now() };
+    sent.set(id, row.updatedAt);
+    return row;
+  });
+  // On a phone's first sync the server's settings win; after that, local edits are pushed.
+  const { key: _tflKey, ...shared } = settings;
+  const pushSettings = !s.firstSync && settings.updatedAt > (s.settingsPushed || 0);
+  try {
+    const res = await fetch(s.url + "/sync", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + s.key, "Content-Type": "application/json" },
+      body: JSON.stringify({ since: s.cursor || 0, trips, settings: pushSettings ? { data: shared, updatedAt: settings.updatedAt } : undefined })
+    });
+    if (res.status === 401) throw new Error("the household key was rejected");
+    if (!res.ok) throw new Error("the sync server returned " + res.status);
+    const reply = await res.json();
+    const settingsChanged = mergeRemote(reply, s.firstSync);
+    // Keep anything that changed again while the request was in flight.
+    const now = new Map(store.get("log", []).map((t) => [t.id, t.updatedAt]));
+    store.set("outbox", store.get("outbox", []).filter((id) => !sent.has(id) || (now.has(id) && now.get(id) !== sent.get(id))));
+    const left = store.get("tombstones", {});
+    sent.forEach((_, id) => delete left[id]);
+    store.set("tombstones", left);
+    if (pushSettings) s.settingsPushed = settings.updatedAt;
+    if (s.firstSync && !reply.settings) s.settingsPushed = 0; // server had none: upload ours next time
+    const pushNext = s.firstSync && !reply.settings;
+    Object.assign(s, { cursor: reply.cursor, lastOk: Date.now(), lastError: "", firstSync: false });
+    if (pushNext) {
+      if (!settings.updatedAt) { settings.updatedAt = Date.now(); store.set("settings", settings); }
+      queueSync();
+    }
+    if (settingsChanged && !PEOPLE.includes(state.who)) state.who = device.self;
+  } catch (e) {
+    s.lastError = /fetch|network|load failed/i.test(e.message) ? "can't reach the sync server" : e.message;
+  } finally {
+    saveDevice(); syncing = false;
+    renderSyncStatus(); refreshAfterSync();
+  }
+}
+
+// Newer wins for each trip; a remote delete removes a trip unless it was edited here since.
+// Returns true if the shared settings changed.
+function mergeRemote(reply, first) {
+  const log = store.get("log", []);
+  const byId = new Map(log.map((t) => [t.id, t]));
+  let changed = false;
+  for (const t of reply.trips || []) {
+    const mine = byId.get(t.id);
+    if (t.deleted) {
+      if (mine && (mine.updatedAt || 0) <= t.updatedAt) { byId.delete(t.id); changed = true; }
+    } else if (t.data && (!mine || (mine.updatedAt || 0) < t.updatedAt)) {
+      byId.set(t.id, t.data); changed = true;
+    }
+  }
+  if (changed) store.set("log", [...byId.values()].sort((a, b) => b.start - a.start).slice(0, 2000));
+  const r = reply.settings;
+  if (r && (first || r.updatedAt > (settings.updatedAt || 0))) {
+    settings = normaliseSettings({ ...r.data, key: settings.key, updatedAt: r.updatedAt });
+    store.set("settings", settings);
+    device.sync.settingsPushed = r.updatedAt;
+    return true;
+  }
+  return false;
+}
+
+function renderSyncStatus() {
+  const el = $("syncStatus");
+  if (!el) return;
+  const s = device.sync || {};
+  $("syncNow").disabled = !syncOn() || syncing;
+  $("syncDisconnect").classList.toggle("hidden", !syncOn());
+  $("setupIntro").textContent = syncOn()
+    ? "Kept on this phone and synced to your own Cloudflare database, shared with your partner's phone. The site's code is public; your addresses go only to TfL (for journeys) and your sync server."
+    : "Saved only in this browser. The site's code is public, but your addresses never leave your phone except in requests to TfL.";
+  if (!syncOn()) { el.textContent = "Not connected — trips and settings are only on this phone."; return; }
+  const waiting = store.get("outbox", []).length;
+  const when = s.lastOk ? new Date(s.lastOk).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "not yet";
+  el.innerHTML = syncing ? "Syncing…"
+    : s.lastError ? `<span class="stale-note">Couldn't sync: ${esc(s.lastError)}.</span> ${waiting ? `${waiting} change${waiting > 1 ? "s" : ""} will go up next time.` : ""}`
+    : `Synced ${esc(when)} · ${store.get("log", []).length} trips shared across both phones.`;
+}
+// Show what arrived, without clobbering a Setup field someone is typing in.
+function refreshAfterSync() {
+  const tab = currentTab();
+  if (tab === "today") renderToday();
+  if (tab === "trips") renderTrips();
+  if (tab === "setup" && !document.activeElement?.matches("input, select")) renderSetup();
+  renderHeader();
 }
 
 // ---------- TfL ----------
@@ -675,8 +819,9 @@ function endTrip(save) {
     // One entry per train you board, so busyness can be rated (and recalled) per station.
     const legs = journey ? railLegs(journey).map((l) => ({ line: l.line, name: legName(l), from: stationName(l.from), naptan: l.naptan, dep: l.dep })) : [];
     const log = store.get("log", []);
-    log.unshift({ ...rest, legs, end, mins: Math.max(1, Math.round((end - a.start) / MIN)) });
-    store.set("log", log.slice(0, 2000));
+    const trip = { ...rest, id: tripId(a), legs, end, updatedAt: end, mins: Math.max(1, Math.round((end - a.start) / MIN)) };
+    log.unshift(trip);
+    saveLog(log.slice(0, 2000), [trip.id]);
   }
   store.del("active"); clearInterval(tripTimer);
   document.body.classList.remove("on-trip");
@@ -727,7 +872,8 @@ $("rateSave").onclick = () => {
   if (t) {
     if (t.legs?.length) t.legs = t.legs.map((l, k) => ({ ...l, ...rating.draft[k] }));
     else t.overall = rating.draft[0];
-    store.set("log", log);
+    t.updatedAt = Date.now();
+    saveLog(log, [t.id]);
     toast("Saved");
   }
   closeRating();
@@ -786,8 +932,10 @@ function renderTrips() {
   const log = store.get("log", []);
   const last = device.backedUp ? new Date(device.backedUp) : null;
   const stale = log.length && (!last || Date.now() - last > 7 * 24 * 60 * MIN);
-  $("backupNote").innerHTML = `Trips are saved only in this browser on this phone — clearing Safari's website data deletes them. Add the app to your Home Screen and back up now and then. ` +
-    `<span class="${stale ? "stale-note" : ""}">${last ? `Last backup ${last.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}.` : log.length ? "Not backed up yet." : ""}</span>`;
+  $("backupNote").innerHTML = syncOn()
+    ? `Trips sync to your Cloudflare database and both phones${device.sync.lastError ? ` — <span class="stale-note">last sync failed (${esc(device.sync.lastError)})</span>` : ""}. A backup file is an optional extra.`
+    : `Trips are saved only in this browser on this phone — clearing Safari's website data deletes them. Connect sync in Setup, or back up now and then. ` +
+      `<span class="${stale ? "stale-note" : ""}">${last ? `Last backup ${last.toLocaleDateString("en-GB", { day: "numeric", month: "short" })}.` : log.length ? "Not backed up yet." : ""}</span>`;
   if (!log.length) {
     $("tiles").innerHTML = `<div class="empty"><h2>No trips yet</h2><p>Tap <b>Time this trip</b> when you head out and <b>Arrived</b> when you get there. Averages and a chart build up here, on this phone only.</p></div>`;
     $("tripList").innerHTML = ""; return;
@@ -823,7 +971,9 @@ $("tripList").onclick = (e) => {
   const r = e.target.closest("[data-rate]");
   if (r) { openRating(+r.dataset.rate); return; }
   const b = e.target.closest("[data-del]"); if (!b) return;
-  const log = store.get("log", []); log.splice(+b.dataset.del, 1); store.set("log", log); renderTrips();
+  const log = store.get("log", []);
+  const [gone] = log.splice(+b.dataset.del, 1);
+  saveLog(log, [], gone ? [gone.id] : []); renderTrips();
 };
 const download = (blob, filename) => {
   const a = document.createElement("a");
@@ -846,8 +996,9 @@ $("restoreFile").onchange = async (e) => {
     if (data.app !== "home-tfl" || !Array.isArray(data.log)) throw new Error("not a backup");
     // Merge: keep every trip once, newest first.
     const log = store.get("log", []), seen = new Set(log.map((t) => t.who + "|" + t.start));
-    const added = data.log.filter((t) => t && t.start && !seen.has(t.who + "|" + t.start));
-    store.set("log", log.concat(added).sort((a, b) => b.start - a.start).slice(0, 2000));
+    const added = data.log.filter((t) => t && t.start && !seen.has(t.who + "|" + t.start))
+      .map((t) => ({ ...t, id: t.id || tripId(t), updatedAt: t.updatedAt || t.end || t.start }));
+    saveLog(log.concat(added).sort((a, b) => b.start - a.start).slice(0, 2000), added.map((t) => t.id));
     toast(`Restored ${added.length} trip${added.length === 1 ? "" : "s"}`); renderTrips();
   } catch (err) { toast("That file isn't a trips backup"); }
 };
@@ -860,7 +1011,10 @@ $("exportCsv").onclick = () => {
   const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
   download(new Blob([csv], { type: "text/csv" }), "commute-log.csv");
 };
-$("clearLog").onclick = () => { if (confirm("Delete all logged trips on this phone?")) { store.set("log", []); renderTrips(); } };
+$("clearLog").onclick = () => {
+  if (!confirm(syncOn() ? "Delete all logged trips on both phones and in your Cloudflare copy?" : "Delete all logged trips on this phone?")) return;
+  saveLog([], [], store.get("log", []).map((t) => t.id)); renderTrips();
+};
 
 // ---------- Setup ----------
 
@@ -879,6 +1033,7 @@ function renderSetup() {
   segButtons($("s-theme"), [["system", "System"], ["dark", "Dark"], ["light", "Light"]], device.theme, "theme");
   $("s-modes").innerHTML = MODES.map((m) => `<button type="button" class="chip${settings.modes.includes(m.id) ? " on" : ""}" data-mode="${m.id}" aria-pressed="${settings.modes.includes(m.id)}" style="--c:${m.c}"><i></i>${m.label}</button>`).join("");
   renderRoutes();
+  renderSyncStatus();
   renderStep();
 }
 
@@ -927,7 +1082,7 @@ let savedFlash;
 function saved() { clearTimeout(savedFlash); savedFlash = setTimeout(() => toast("Saved"), 400); }
 
 $("view-setup").addEventListener("change", (e) => {
-  if (e.target.matches("input[type=text]:not([data-route-q]), input[type=password]")) { readTextFields(); renderSetup(); saved(); }
+  if (e.target.matches("input[type=text]:not([data-route-q]):not([data-nosave]), input[type=password]:not([data-nosave])")) { readTextFields(); renderSetup(); saved(); }
 });
 $("view-setup").addEventListener("click", async (e) => {
   const t = e.target.closest("button"); if (!t) return;
@@ -993,7 +1148,8 @@ $("stepNext").onclick = () => {
 // Sharing: a code (base64 JSON) or a link that carries it in the hash (never sent to a server).
 function shareCode() {
   const { key, ...shareable } = settings;
-  return btoa(unescape(encodeURIComponent(JSON.stringify({ v: 2, from: device.self, ...shareable }))));
+  const sync = syncOn() ? { url: device.sync.url, key: device.sync.key } : undefined;
+  return btoa(unescape(encodeURIComponent(JSON.stringify({ v: 2, from: device.self, ...shareable, sync }))));
 }
 function importCode(code) {
   const data = JSON.parse(decodeURIComponent(escape(atob(code.trim()))));
@@ -1007,12 +1163,24 @@ function importCode(code) {
     };
     sender = "a";
   }
-  settings = normaliseSettings({ ...settings, ...incoming, key: settings.key });
+  const { sync: link, ...shared } = incoming;
+  settings = normaliseSettings({ ...settings, ...shared, key: settings.key });
   saveSettings();
   device.self = other(sender || "a"); device.onboarded = true; saveDevice();
   state.who = device.self;
+  if (link?.url && link?.key) { connectSync(link.url, link.key); sync(); }
   return settings.names[sender] || "your partner";
 }
+$("syncNow").onclick = () => sync();
+$("syncConnect").onclick = () => {
+  const url = $("s-sync-url").value.trim(), key = $("s-sync-key").value.trim();
+  if (!/^https:\/\/|^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(url) || key.length < 16) { toast("Add the sync URL and household key"); return; }
+  connectSync(url, key); $("s-sync-key").value = ""; sync();
+};
+$("syncDisconnect").onclick = () => {
+  if (!confirm("Stop syncing on this phone? Trips already here stay here.")) return;
+  device.sync = null; saveDevice(); renderSyncStatus();
+};
 $("copyCode").onclick = async () => {
   try { await navigator.clipboard.writeText(shareCode()); toast("Code copied"); }
   catch (e) { $("importInput").value = shareCode(); $("importInput").select(); toast("Copy the code above"); }
@@ -1102,9 +1270,12 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") { hiddenAt = Date.now(); return; }
   if (Date.now() - hiddenAt > 30 * MIN) { state.dir = null; state.sel = 0; }
   if (currentTab() === "today") renderToday();
+  // Coming back after a while counts as opening the app: pick up the other phone's changes.
+  if (Date.now() - (device.sync?.lastOk || 0) > 5 * MIN) sync();
 });
 // Keeps "in 12 min" labels honest. Local re-render only — no network.
 setInterval(() => { if (document.visibilityState === "visible" && currentTab() === "today" && !activeTrip()) renderToday(); }, 30000);
 
 applyTheme();
 showTab();
+sync(); // once on open (no-op when not connected)

@@ -269,6 +269,7 @@ input:focus-visible, button:focus-visible, a:focus-visible, summary:focus-visibl
 .route-pick .row { margin: 0; }
 .alt-via { color: var(--fg); font-weight: 600; }
 .stale-note { color: var(--warn); font-weight: 600; }
+.sync-manual summary { cursor: pointer; color: var(--muted); padding: 6px 0; }
 .advanced summary { cursor: pointer; list-style: none; }
 .advanced summary::-webkit-details-marker { display: none; }
 .advanced summary::after { content: " +"; }

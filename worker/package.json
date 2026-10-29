@@ -1,0 +1,14 @@
+{
+  "name": "home-tfl-sync",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "deploy": "wrangler deploy",
+    "migrate": "wrangler d1 execute home-tfl --remote --file schema.sql",
+    "migrate:local": "wrangler d1 execute home-tfl --local --file schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4.155.0"
+  }
+}

@@ -127,8 +127,23 @@
       </div>
 
       <div class="group" data-step="extra">
+        <h2 class="h2">Sync across phones</h2>
+        <p class="muted small" id="syncStatus"></p>
+        <div class="row">
+          <button class="btn btn-small" id="syncNow" type="button">Sync now</button>
+          <button class="btn btn-small btn-ghost" id="syncDisconnect" type="button">Disconnect</button>
+        </div>
+        <details class="sync-manual">
+          <summary class="small">Connect manually</summary>
+          <label class="field"><span>Sync URL</span><input type="text" id="s-sync-url" data-nosave placeholder="https://home-tfl-sync.….workers.dev" autocomplete="off" autocapitalize="off"></label>
+          <label class="field"><span>Household key</span><input type="password" id="s-sync-key" data-nosave autocomplete="off"></label>
+          <button class="btn btn-small btn-primary" id="syncConnect" type="button">Connect</button>
+        </details>
+      </div>
+
+      <div class="group" data-step="extra">
         <h2 class="h2">Send to your partner</h2>
-        <p class="muted small">Shares names, places and transport settings (not your app key). Send the link privately — it contains your addresses.</p>
+        <p class="muted small">Shares names, places, routes and the sync connection (not your TfL app key). Treat the link like a password — it contains your addresses and opens your synced trips.</p>
         <div class="row">
           <button class="btn btn-small" id="shareLink" type="button">Share link</button>
           <button class="btn btn-small" id="copyCode" type="button">Copy code</button>

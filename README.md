@@ -24,7 +24,13 @@ Switching person, direction or start point just shows that combination's last re
 
 ## Where trips are stored
 
-There is no database. Trips, settings and cached results live in each phone's browser storage (`localStorage`), separately on each phone. They survive app updates, but clearing Safari's website data deletes them, and Safari can clear storage for sites not opened for 7 days. Home Screen web apps are exempt from that. So: add the app to your Home Screen, and use **Trips → Back up** now and then (a JSON file you can **Restore** from; it merges without duplicates). The app also asks the browser for persistent storage the first time you time a trip.
+Each phone keeps its own working copy in browser storage (`localStorage`), so the app works offline. When **sync** is connected (Setup → Sync across phones), trips, ratings and settings (names, places, saved routes) are also stored in a small Cloudflare Worker + D1 database (`worker/`) that both phones share:
+
+- It syncs only with the Worker, never TfL: once when the app opens, a couple of seconds after a change, and on **Sync now**. Changes made offline stay queued until the next sync.
+- For each trip the newest edit wins, and deletes sync too. The TfL app key stays on each phone.
+- Access needs the household key, a Worker secret. The **Share link** includes the sync URL and key, so treat it like a password.
+
+**Trips → Back up / Restore** (a JSON file that merges without duplicates) is still there as an extra safety net.
 
 ## Privacy
 
@@ -32,11 +38,24 @@ Everything you enter is kept in `localStorage` in your browser. The repo contain
 
 ## Development
 
-Plain HTML, CSS and JS with no build step. GitHub Pages serves `docs/` from `main`.
+The app is plain HTML, CSS and JS with no build step. GitHub Pages serves `docs/` from `main`.
 
 ```bash
-python3 -m http.server -d docs 8000
-open "http://localhost:8000/?now=08:05"   # ?now=HH:MM fakes the clock (direction default, countdowns)
+python3 -m http.server -d docs 8765 --bind 127.0.0.1
+open "http://127.0.0.1:8765/?now=08:05"   # ?now=HH:MM fakes the clock (direction default, countdowns)
 ```
+
+The sync Worker is in `worker/`:
+
+```bash
+cd worker && npm install
+echo 'HOUSEHOLD_KEY=dev-key-for-local-testing-only' > .dev.vars
+npm run migrate:local && npm run dev         # http://127.0.0.1:8787, local D1
+# deploy (after `npx wrangler login`):
+npm run migrate && npm run deploy
+openssl rand -hex 32 | npx wrangler secret put HOUSEHOLD_KEY
+```
+
+`127.0.0.1:8765` and `localhost:8765` have separate storage, so they work as two "phones" for testing sync.
 
 Data: Powered by TfL Open Data. Contains OS data © Crown copyright and database rights.

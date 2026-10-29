@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "home-tfl-sync",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  "vars": {
+    // Pages allowed to call the API from a browser (the household key is still required).
+    "ALLOWED_ORIGINS": "https://billlyzhaoyh.github.io,http://127.0.0.1:8765,http://localhost:8765"
+  },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "home-tfl", "database_id": "00000000-0000-0000-0000-000000000000" }
+  ]
+}
