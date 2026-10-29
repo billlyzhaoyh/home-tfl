@@ -171,6 +171,17 @@
     </a>
   </nav>
 </div>
+<div class="sheet-backdrop hidden" id="rateSheet">
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="rateTitle">
+    <h2 class="sheet-title" id="rateTitle">How busy was it?</h2>
+    <p class="muted small" id="rateSub"></p>
+    <div id="rateLegs"></div>
+    <div class="sheet-actions">
+      <button class="btn btn-ghost" id="rateSkip" type="button">Skip</button>
+      <button class="btn btn-primary" id="rateSave" type="button">Save</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script src="app.js"></script>
 </body>

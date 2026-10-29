@@ -497,7 +497,9 @@ function renderBusyness(j) {
   const rows = legs.map((l) => {
     const v = typicalAt(l.naptan, l.dep);
     const name = `<span class="busy-name">${esc(stationName(l.from))}</span><span class="busy-time mono">${hhmm(l.dep)}</span>`;
-    if (v == null) return `<li class="busy-row">${name}<span class="busy-none">no data</span></li>`;
+    const h = ownHistory(l);
+    const mine = h ? `<li class="busy-mine"><b>You, around this time:</b> ${ownHistoryText(h)}</li>` : "";
+    if (v == null) return `<li class="busy-row">${name}<span class="busy-none">no data</span></li>${mine}`;
     const lvl = typicalLabel(v);
     // An hour either side, one bar per 15 minutes, the band you're there in highlighted.
     const bars = [-4, -3, -2, -1, 0, 1, 2, 3, 4].map((o) => {
@@ -507,7 +509,7 @@ function renderBusyness(j) {
       const tip = b == null ? "" : `<title>${hm(t)}: ${typicalLabel(b).text} (${Math.round(b * 100)}% of its usual peak)</title>`;
       return `<rect x="${(o + 4) * 7}" y="${22 - h}" width="5" height="${h}" rx="1.5" class="${o === 0 ? "now " + lvl.level : ""}">${tip}</rect>`;
     }).join("");
-    return `<li class="busy-row">${name}<svg class="busy-spark" viewBox="0 0 61 22" role="img" aria-label="Typical busyness an hour either side">${bars}</svg><span class="busy-lvl"><span class="dot ${lvl.level}"></span>${lvl.text}</span></li>`;
+    return `<li class="busy-row">${name}<svg class="busy-spark" viewBox="0 0 61 22" role="img" aria-label="Typical busyness an hour either side">${bars}</svg><span class="busy-lvl"><span class="dot ${lvl.level}"></span>${lvl.text}</span></li>${mine}`;
   }).join("");
   // If the busiest stop is usually calmer 15 or 30 min earlier, say so.
   let hint = "";
@@ -618,6 +620,8 @@ function renderToday() {
     const meta = lines.map((st) => `<span><span class="dot ${sevClass(st.sev)}"></span>${esc(st.name)}: ${esc(st.desc)}</span>`);
     if (x.via) meta.unshift(`<span class="alt-via">${esc(x.via)}</span>`);
     const peak = peakBusyness(x);
+    const packedAt = railLegs(x).map((l) => ({ l, h: ownHistory(l) })).find(({ h }) => h && h.packed);
+    if (packedAt) meta.push(`<span><span class="dot bad"></span>you: packed at ${esc(stationName(packedAt.l.from))} ${packedAt.h.packed}/${packedAt.h.n}</span>`);
     if (peak) meta.push(`<span><span class="dot ${typicalLabel(peak.v).level}"></span>${esc(stationName(peak.leg.from))} ${busyPhrase(peak.v)}</span>`);
     return `<button class="alt" type="button" data-sel="${i}"><span class="t">${hhmm(x.start)}</span>${strip(x, true)}<span class="d">${x.duration}m</span>${meta.length ? `<span class="alt-meta">${meta.join("")}</span>` : ""}</button>`;
   }).join("") + `</div>` : "";
@@ -668,14 +672,94 @@ function endTrip(save) {
   if (save) {
     const end = Date.now();
     const { journey, ...rest } = a;
+    // One entry per train you board, so busyness can be rated (and recalled) per station.
+    const legs = journey ? railLegs(journey).map((l) => ({ line: l.line, name: legName(l), from: stationName(l.from), naptan: l.naptan, dep: l.dep })) : [];
     const log = store.get("log", []);
-    log.unshift({ ...rest, end, mins: Math.max(1, Math.round((end - a.start) / MIN)) });
+    log.unshift({ ...rest, legs, end, mins: Math.max(1, Math.round((end - a.start) / MIN)) });
     store.set("log", log.slice(0, 2000));
-    toast(`Logged ${Math.round((end - a.start) / MIN)} min`);
   }
   store.del("active"); clearInterval(tripTimer);
   document.body.classList.remove("on-trip");
   renderToday();
+  if (save) openRating(store.get("log", [])[0].start);
+}
+
+// ---------- how busy was it (your own data) ----------
+// After a trip, rate each train: seat / standing / packed, and how many you let go.
+const CROWD = [["seat", "Got a seat"], ["stand", "Standing"], ["packed", "Packed"]];
+const CROWD_WORD = { seat: "seat", stand: "standing", packed: "packed" };
+let rating = null; // { start, legs, draft: [{ crowd, skipped }] }
+
+function openRating(start) {
+  const t = store.get("log", []).find((x) => x.start === start);
+  if (!t) return;
+  const legs = t.legs?.length ? t.legs : [{ name: "The trip", ...t.overall }];
+  rating = { start, legs, draft: legs.map((l) => ({ crowd: l.crowd || null, skipped: l.skipped ?? null })) };
+  $("rateSub").textContent = `${name(t.who)} → ${placeLabel(t.dir)} · ${t.mins} min. Kept on this phone only.`;
+  renderRating();
+  $("rateSheet").classList.remove("hidden");
+}
+function renderRating() {
+  $("rateLegs").innerHTML = rating.legs.map((l, i) => {
+    const d = rating.draft[i];
+    return `<div class="rate-leg" data-i="${i}">
+      <p class="rate-name"><b>${esc(l.name)}</b>${l.from ? ` from ${esc(l.from)}` : ""}${l.dep ? ` <span class="mono muted">${hhmm(l.dep)}</span>` : ""}</p>
+      <div class="seg rate-seg" role="group" aria-label="How busy">${CROWD.map(([v, lbl]) =>
+        `<button type="button" data-crowd="${v}" class="${d.crowd === v ? "on" : ""}" aria-pressed="${d.crowd === v}">${lbl}</button>`).join("")}</div>
+      <div class="rate-skip"><span class="muted small">Trains you let go</span><div class="seg" role="group" aria-label="Trains you let go">${[0, 1, 2, 3].map((n) =>
+        `<button type="button" data-skip="${n}" class="${d.skipped === n ? "on" : ""}" aria-pressed="${d.skipped === n}">${n === 3 ? "3+" : n}</button>`).join("")}</div></div>
+    </div>`;
+  }).join("");
+}
+function closeRating() {
+  $("rateSheet").classList.add("hidden"); rating = null;
+  if (currentTab() === "trips") renderTrips();
+}
+$("rateLegs").onclick = (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  const d = rating.draft[+b.closest(".rate-leg").dataset.i];
+  if (b.dataset.crowd) d.crowd = d.crowd === b.dataset.crowd ? null : b.dataset.crowd;
+  if (b.dataset.skip) d.skipped = d.skipped === +b.dataset.skip ? null : +b.dataset.skip;
+  renderRating();
+};
+$("rateSave").onclick = () => {
+  const log = store.get("log", []), t = log.find((x) => x.start === rating.start);
+  if (t) {
+    if (t.legs?.length) t.legs = t.legs.map((l, k) => ({ ...l, ...rating.draft[k] }));
+    else t.overall = rating.draft[0];
+    store.set("log", log);
+    toast("Saved");
+  }
+  closeRating();
+};
+$("rateSkip").onclick = closeRating;
+$("rateSheet").onclick = (e) => { if (e.target === $("rateSheet")) closeRating(); };
+
+const ratedLegs = (t) => (t.legs?.length ? t.legs : t.overall ? [{ name: "Trip", ...t.overall }] : []).filter((l) => l.crowd || l.skipped != null);
+const ratingText = (l) => [CROWD_WORD[l.crowd], l.skipped == null ? "" : l.skipped ? `let ${l.skipped === 3 ? "3+" : l.skipped} go` : "first train"].filter(Boolean).join(", ");
+
+// Your ratings for this station and line, on the same kind of day, within ±30 minutes.
+function ownHistory(leg) {
+  const lines = SAME_SERVICE[leg.line] || [leg.line];
+  const at = new Date(leg.dep), mins = (d) => d.getHours() * 60 + d.getMinutes();
+  const weekend = (d) => d.getDay() === 0 || d.getDay() === 6;
+  const hits = store.get("log", []).flatMap((t) => t.legs || []).filter((x) => {
+    if (x.naptan !== leg.naptan || !lines.includes(x.line) || (!x.crowd && x.skipped == null)) return false;
+    const d = new Date(x.dep);
+    return weekend(d) === weekend(at) && Math.abs(mins(d) - mins(at)) <= 30;
+  });
+  if (!hits.length) return null;
+  const count = (c) => hits.filter((x) => x.crowd === c).length;
+  const skips = hits.filter((x) => x.skipped != null);
+  return { n: hits.length, packed: count("packed"), stand: count("stand"), seat: count("seat"), avgSkip: skips.length ? skips.reduce((a, x) => a + x.skipped, 0) / skips.length : null };
+}
+function ownHistoryText(h) {
+  const bits = [];
+  if (h.packed) bits.push(`packed ${h.packed} of ${h.n}`);
+  if (h.stand) bits.push(`standing ${h.stand} of ${h.n}`);
+  if (h.seat) bits.push(`seat ${h.seat} of ${h.n}`);
+  if (h.avgSkip >= 0.5) bits.push(`usually let ${Math.round(h.avgSkip * 2) / 2} train${h.avgSkip >= 1.5 ? "s" : ""} go`);
+  return bits.length ? bits.join(" · ") : `${h.n} trip${h.n > 1 ? "s" : ""}, no trouble boarding`;
 }
 
 // ---------- Trips ----------
@@ -725,13 +809,19 @@ function renderTrips() {
   $("tripList").innerHTML = log.slice(0, 40).map((t, i) => {
     const d = new Date(t.start);
     const when = d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) + " · " + hm(d);
-    return `<li class="trip-row"><div class="main"><div class="when">${when}</div><div class="via">${esc(name(t.who))} → ${placeLabel(t.dir)}${t.route ? " · " + esc(t.route) : ""}</div></div>
+    const rated = ratedLegs(t);
+    const busy = rated.length
+      ? `<div class="rated">${rated.map((l) => `${esc(l.name)}: ${ratingText(l)}`).join(" · ")}</div>`
+      : `<button type="button" class="rate-link" data-rate="${t.start}">Rate how busy it was</button>`;
+    return `<li class="trip-row"><div class="main"><div class="when">${when}</div><div class="via">${esc(name(t.who))} → ${placeLabel(t.dir)}${t.route ? " · " + esc(t.route) : ""}</div>${busy}</div>
       <div class="mins">${t.mins}m${t.planned ? `<small>plan ${t.planned}</small>` : ""}</div>
       <button class="x" type="button" data-del="${i}" aria-label="Delete trip">×</button></li>`;
   }).join("");
 }
 
 $("tripList").onclick = (e) => {
+  const r = e.target.closest("[data-rate]");
+  if (r) { openRating(+r.dataset.rate); return; }
   const b = e.target.closest("[data-del]"); if (!b) return;
   const log = store.get("log", []); log.splice(+b.dataset.del, 1); store.set("log", log); renderTrips();
 };
@@ -764,8 +854,9 @@ $("restoreFile").onchange = async (e) => {
 $("exportCsv").onclick = () => {
   const log = store.get("log", []);
   if (!log.length) { toast("Nothing to export yet"); return; }
-  const rows = [["who", "direction", "start", "end", "minutes", "planned_minutes", "route"]]
-    .concat(log.map((t) => [name(t.who), t.dir, new Date(t.start).toISOString(), new Date(t.end).toISOString(), t.mins, t.planned ?? "", t.route]));
+  const rows = [["who", "direction", "start", "end", "minutes", "planned_minutes", "route", "busyness"]]
+    .concat(log.map((t) => [name(t.who), t.dir, new Date(t.start).toISOString(), new Date(t.end).toISOString(), t.mins, t.planned ?? "", t.route,
+      ratedLegs(t).map((l) => `${l.name}${l.from ? " from " + l.from : ""}: ${ratingText(l)}`).join("; ")]));
   const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
   download(new Blob([csv], { type: "text/csv" }), "commute-log.csv");
 };

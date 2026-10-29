@@ -306,6 +306,26 @@ body.onboarding .advanced { display: none; }
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+/* ---------- "how busy was it" sheet ---------- */
+.sheet-backdrop { position: fixed; inset: 0; z-index: 30; background: rgb(0 0 0 / .45); display: flex; align-items: flex-end; justify-content: center; }
+.sheet {
+  width: 100%; max-width: 560px; max-height: 90vh; overflow-y: auto;
+  background: var(--bg); border-radius: 20px 20px 0 0; border: 1px solid var(--line); border-bottom: 0;
+  padding: 20px 16px calc(env(safe-area-inset-bottom) + 16px);
+}
+.sheet-title { font-size: 22px; font-weight: 700; letter-spacing: -.01em; margin: 0 0 4px; }
+.rate-leg { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; margin-top: 12px; display: grid; gap: 10px; }
+.rate-name { margin: 0; font-size: 15px; }
+.rate-seg { display: grid; grid-template-columns: repeat(3, 1fr); }
+.rate-seg button { padding: 10px 6px; font-size: 14px; }
+.rate-skip { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.rate-skip .seg button { min-width: 40px; padding: 8px 10px; }
+.sheet-actions { display: grid; grid-template-columns: 1fr 2fr; gap: 10px; margin-top: 16px; }
+.busy-mine { font-size: 12px; color: var(--muted); margin: -4px 0 0; padding-left: 0; }
+.busy-mine b { color: var(--fg); font-weight: 600; }
+.trip-row .rated { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.trip-row .rate-link { border: 0; background: none; padding: 2px 0; margin-top: 2px; font-size: 12px; font-weight: 600; color: var(--accent-text); }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
