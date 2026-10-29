@@ -105,6 +105,13 @@ const norm = (s) => String(s || "").toLowerCase()
   .replace(/\b(underground|rail|dlr|overground|elizabeth line)\b/g, "")
   .replace(/\bstation\b/g, "").replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
 
+// The journey planner calls about half the trains from Hammersmith (H&C) "circle", but the
+// arrivals feed tags them all "hammersmith-city" (Circle ones say towards "Circle Line"), so
+// the two lines are matched as one service.
+const SAME_SERVICE = { circle: ["circle", "hammersmith-city"], "hammersmith-city": ["hammersmith-city", "circle"] };
+const servesLeg = (a, leg) => !leg.line || (SAME_SERVICE[leg.line] || [leg.line]).includes(a.lineId);
+const serviceName = (leg) => (SAME_SERVICE[leg.line] ? "H&C and Circle" : leg.name || legName(leg));
+
 // Pick the arrivals for this leg's direction. Trains are grouped by direction
 // ("Eastbound - Platform 2" -> "Eastbound") so a terminus with several platforms reads as
 // one list. Trains terminating here are dropped (at a terminus TfL lists them with both
@@ -117,7 +124,7 @@ function pickArrivals(arrivals, leg) {
   const groupOf = (a) => (a.platformName || "?").split(" - ")[0].trim();
   const seen = new Set();
   const departing = arrivals
-    .filter((a) => (!leg.line || a.lineId === leg.line) && !(isHere(a.destinationName) && isHere(a.towards)))
+    .filter((a) => servesLeg(a, leg) && !(isHere(a.destinationName) && isHere(a.towards)))
     .sort((a, b) => a.timeToStation - b.timeToStation)
     .filter((a) => {
       const k = [groupOf(a), a.vehicleId || a.id, Math.round(a.timeToStation / 60)].join("|");
@@ -465,7 +472,7 @@ function renderLive(leg, live) {
   const fresh = live && Date.now() - live.at < 15 * MIN;
   const m = minsUntil(leg.dep);
   const btn = m > 30 ? "" : `<button class="linkbtn" type="button" data-refresh-trains ${state.liveBusy ? "disabled" : ""}>${state.liveBusy ? "Refreshing…" : "Refresh trains"}</button>`;
-  const head = `<div class="live-head"><p class="label">Next ${esc(leg.name || legName(leg))} trains · ${station}</p>${btn}</div>`;
+  const head = `<div class="live-head"><p class="label">Next ${esc(serviceName(leg))} trains · ${station}</p>${btn}</div>`;
   if (!live || !fresh) {
     const msg = m > 30 ? `Live trains appear 30 min before you leave (${relMins(m)}).` : live ? "Live trains are out of date." : "No live trains loaded.";
     return `<div class="live">${head}<p class="hint">${msg}</p></div>`;
